@@ -38,12 +38,12 @@
       "id": "4",
       "subject": "Test in nested Hyprland vs sway",
       "description": "Start nested Hyprland with lua:sway, reproduce spec cases (A.2, A.4, B.7-B.12, C.18), compare geometry with nested sway, iterate.",
-      "status": "in_progress",
+      "status": "completed",
       "metadata": {},
       "blocks": [],
       "blockedBy": [],
       "createdAt": 1789074214673,
-      "updatedAt": 1789077688209
+      "updatedAt": 1789082398717
     }
   ]
 }
