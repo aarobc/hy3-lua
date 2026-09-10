@@ -2,25 +2,33 @@
 -- Launch with: Hyprland -c ~/code/hy3-lua/sandbox/hypr-nested.lua
 -- See ../CLAUDE.md for the full workflow.
 
-hl.config({ general = { layout = 'dwindle' } })
-
--- Uncomment once layout.lua has something worth loading:
--- package.path = package.path .. ";" .. os.getenv("HOME") .. "/code/hy3-lua/?.lua"
--- require("layout")
--- hl.config({ general = { layout = 'lua:sway' } })
+package.path = package.path .. ';' .. os.getenv('HOME') .. '/code/hy3-lua/?.lua'
+require('layout')
+hl.config({ general = { layout = 'lua:sway' } })
 
 local mod = 'SUPER'
-local function sc(...) return table.concat({...}, ' + ') end
+local function sc(...)
+    return table.concat({ ... }, ' + ')
+end
 
-hl.bind(sc(mod, 'h'), hl.dsp.focus({ direction = 'left' }))
-hl.bind(sc(mod, 'l'), hl.dsp.focus({ direction = 'right' }))
-hl.bind(sc(mod, 'k'), hl.dsp.focus({ direction = 'up' }))
-hl.bind(sc(mod, 'j'), hl.dsp.focus({ direction = 'down' }))
+-- focus/move go through layout_msg so the layout's own tree decides
+-- (the built-in hl.dsp.window.move / hl.dsp.focus direction handlers are
+-- raw-insertion-order C++ and ignore our structure -- see CLAUDE.md)
+hl.bind(sc(mod, 'h'), hl.dsp.layout('focus left'))
+hl.bind(sc(mod, 'l'), hl.dsp.layout('focus right'))
+hl.bind(sc(mod, 'k'), hl.dsp.layout('focus up'))
+hl.bind(sc(mod, 'j'), hl.dsp.layout('focus down'))
 
-hl.bind(sc(mod, 'SHIFT', 'h'), hl.dsp.window.move({ direction = 'left' }))
-hl.bind(sc(mod, 'SHIFT', 'l'), hl.dsp.window.move({ direction = 'right' }))
-hl.bind(sc(mod, 'SHIFT', 'k'), hl.dsp.window.move({ direction = 'up' }))
-hl.bind(sc(mod, 'SHIFT', 'j'), hl.dsp.window.move({ direction = 'down' }))
+hl.bind(sc(mod, 'SHIFT', 'h'), hl.dsp.layout('move left'))
+hl.bind(sc(mod, 'SHIFT', 'l'), hl.dsp.layout('move right'))
+hl.bind(sc(mod, 'SHIFT', 'k'), hl.dsp.layout('move up'))
+hl.bind(sc(mod, 'SHIFT', 'j'), hl.dsp.layout('move down'))
 
-hl.bind(sc(mod, 'RETURN'), hl.dsp.exec('foot'))
+-- split orientation (added to both sandbox configs for parity; sway has
+-- no default binds for these)
+hl.bind(sc(mod, 'v'), hl.dsp.layout('splitv'))
+hl.bind(sc(mod, 's'), hl.dsp.layout('splith'))
+hl.bind(sc(mod, 't'), hl.dsp.layout('togglesplit'))
+
+hl.bind(sc(mod, 'RETURN'), hl.dsp.exec_cmd('foot'))
 hl.bind(sc(mod, 'q'), hl.dsp.window.close())

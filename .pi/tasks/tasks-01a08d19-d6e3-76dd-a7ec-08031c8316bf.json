@@ -1,0 +1,49 @@
+{
+  "nextId": 5,
+  "tasks": [
+    {
+      "id": "1",
+      "subject": "Research layout API (ctx, layout_msg, focus)",
+      "description": "Read hl.meta.lua layout section, LuaLayoutProvider.cpp/LuaLayoutContext.cpp, example manual.lua. Determine: layout_msg dispatch syntax, focused-window access from ctx, target API surface.",
+      "status": "completed",
+      "metadata": {},
+      "blocks": [],
+      "blockedBy": [],
+      "createdAt": 1789074214670,
+      "updatedAt": 1789076989457
+    },
+    {
+      "id": "2",
+      "subject": "Implement tree state + recalculate in layout.lua",
+      "description": "n-ary container tree with sticky orientation, per-child fractions, keyed by stable_id; reconcile with ctx.targets each recalculate; handle new-window insertion (after focused), closure (proportional renormalize, 1-child persist, 0-child reap).",
+      "status": "completed",
+      "metadata": {},
+      "blocks": [],
+      "blockedBy": [],
+      "createdAt": 1789074214672,
+      "updatedAt": 1789077688208
+    },
+    {
+      "id": "3",
+      "subject": "Implement sway move/split via layout_msg",
+      "description": "Implement move left/right/up/down per spec (b): crawl-up to parallel level, swap/cousin-insert/promote/re-orient rules, focus follows. Implement splitv/splith/togglesplit with singleton rule. Wire mod+shift+dir in sandbox config to layout_msg dispatches.",
+      "status": "completed",
+      "metadata": {},
+      "blocks": [],
+      "blockedBy": [],
+      "createdAt": 1789074214672,
+      "updatedAt": 1789077688209
+    },
+    {
+      "id": "4",
+      "subject": "Test in nested Hyprland vs sway",
+      "description": "Start nested Hyprland with lua:sway, reproduce spec cases (A.2, A.4, B.7-B.12, C.18), compare geometry with nested sway, iterate.",
+      "status": "in_progress",
+      "metadata": {},
+      "blocks": [],
+      "blockedBy": [],
+      "createdAt": 1789074214673,
+      "updatedAt": 1789077688209
+    }
+  ]
+}

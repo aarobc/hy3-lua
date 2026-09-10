@@ -45,6 +45,30 @@ first, the process cmdline no longer matches and `pkill -f` silently does
 nothing while claiming success. Verify with `hyprctl instances` /
 `pgrep -fa sway` afterward, not just by checking pkill's exit code.
 
+**Run at most ONE nested instance at a time** (sway or Hyprland) unless a
+test genuinely needs two side by side. Kill the previous one (exact pid)
+before starting the next; leftovers pile up on `wayland-2`/`3`/... and
+steal sockets.
+
+**Spawn test clients INTO the nested instance, never onto the host.**
+Shell-spawning `foot &` with a stale/empty `WAYLAND_DISPLAY` silently
+lands the window on the host's active workspace (popping up on the user's
+cursor) and corrupts the test. Canonical ways to spawn a client, all of
+which target the nested instance's own active workspace:
+- Hyprland: `hyprctl -i <sig> dispatch 'hl.dsp.exec("foot")'`
+- sway: `swaymsg -s <SOCK> exec foot`
+Only if you must shell-spawn, verify the socket variable is non-empty AND
+belongs to the live instance first (`test -S /run/user/1001/<sock>` and
+match it against `hyprctl instances`), and after spawning confirm the
+window actually appeared via `hyprctl -i <sig> -j clients` / `get_tree` —
+not via the "no error" of the spawn command.
+
+**Never `pkill -x foot` (or any broad pkill of user-visible apps)** — it
+kills the user's real terminals, including the one this session runs in.
+To sweep nested test clients, iterate `pgrep -x foot` and kill only PIDs
+whose `/proc/<pid>/environ` contains the nested instance's
+`WAYLAND_DISPLAY=<socket>`.
+
 ## Nested Hyprland: starting and targeting
 
 ```sh
