@@ -23,12 +23,71 @@ approach in `~/dotfiles/hypr/fallback.lua`.
 
 - `CLAUDE.md` — this file.
 - `layout.lua` — the `hl.layout.register("sway", {...})` implementation.
-  Currently a stub (naive equal-width columns) — not yet doing anything
-  tree-based. Build the real thing here.
-- `sandbox/hypr-nested.lua` — minimal nested Hyprland config for testing.
-  Has commented-out lines to load `layout.lua` once it's worth loading.
-- `sandbox/sway-nested.config` — minimal nested sway config with the same
-  keybinds, for side-by-side behavior comparison.
+  Complete: n-ary tree state, movement, splits, focus, closure (see
+  "Current status"). Loaded by the sandbox config; debug hooks in
+  `_G.swaydbg` (see below).
+- `notes/sway-spec.md` — the empirical behavioral spec (sway 1.12) that
+  `layout.lua` implements. Every case verified against a real nested sway.
+  **Read this before changing movement/insertion/split logic** — it is
+  the source of truth, including the surprising bits (no auto-wrap on
+  plain open, workspace re-orientation on orthogonal moves, 1-child
+  containers persist).
+- `sandbox/hypr-nested.lua` — minimal nested Hyprland config; loads
+  `layout.lua`, sets `layout = 'lua:sway'`, binds mod+hjkl to
+  `hl.dsp.layout('focus …')`, mod+shift+hjkl to `hl.dsp.layout('move …')`,
+  mod+v/s/t to the split commands, mod+Return to `hl.dsp.exec_cmd('foot')`,
+  mod+q to close.
+- `sandbox/sway-nested.config` — matching nested sway config (same
+  keybinds, plus mod+v/s/t for split parity).
+- `sandbox/battery.sh`, `sandbox/battery2.sh` — spec-case test sequences
+  against a running nested instance (expects `/tmp/nested-sig`). Clients
+  are spawned via the instance's own `hl.dsp.exec_cmd` dispatch so they
+  can never land on the host.
+
+## Current status
+
+**Done and verified** (nested-instance batteries + one live side-by-side
+against real sway 1.12; case numbers refer to `notes/sway-spec.md`):
+- Tree model: n-ary containers, sticky H/V orientation, per-child
+  fractions; state keyed by `window.workspace.id`; reconciled with
+  `ctx.targets` every recalc (prune dead → insert new → fraction pass →
+  place).
+- Insertion (A): sibling after the pre-map focused window in its innermost
+  container; armed `splitv`/`splith` wrapper inherits the leaf's exact
+  slot; singleton rule rewrites the parent/workspace layout instead of
+  wrapping (A.1–A.6, D.22 ✓).
+- Movement (B): parallel-level crawl; adjacent swap with percents
+  traveling (B.7); cousin insertion and focused-child descent (B.8–B.9,
+  B.12); promotion (B.10); workspace re-orientation (B.14 — side-by-side
+  match with sway); past-end no-op (B.13); focus follows the move (B.16).
+- Focus: climb-up beats wrapping; wrap at the deepest parallel level;
+  descent into the container's remembered focused child.
+- Closure (C): proportional fraction renormalize; 1-child containers
+  persist (child → frac 1.0); 0-child containers reaped (C.17–C.19).
+
+**Fraction semantics** (mirrors sway arrange; in `normalize`): children
+with `frac <= 0` get the *average of the existing positive siblings'*
+fractions — not `possum/total-count`, which gives 2/3·1/3 on the second
+open — then all fractions renormalize to sum 1 per parent level.
+
+**Known gaps / deliberate divergences:**
+- Cross-monitor hand-off on `move` past the workspace edge is a no-op
+  (sway would move the window to the adjacent output).
+- Per-container `last_focus` is synced by recalcs plus our own
+  focus/move/insert bookkeeping, but does NOT follow click-driven focus
+  changes: a click into a non-last-focused branch, then a `move` into
+  that container, descends into the remembered child instead.
+- No gap modeling: placement divides the raw `ctx.area`; topology and
+  relative sizes match a gapped sway, absolute geometry does not.
+- `S` (per-workspace state) is never pruned for destroyed workspaces;
+  workspace ids appear monotonically increasing in practice.
+
+**Debug tooling** (in `layout.lua`, cheap enough to leave in):
+- `hyprctl -i <sig> repl 'return swaydbg.dump()'` — pretty tree with
+  fracs and last-focus marks for every tracked workspace.
+- `swaydbg.state` — the raw state table.
+- Start the nested instance as `HY3_DEBUG_LOG=/tmp/hy3-swdbg.log Hyprland
+  -c …` for a per-recalc log (targets, active id, inserts).
 
 ## Why nested instances
 
@@ -239,6 +298,57 @@ Real sample (nested instance, 2 tiled `foot` windows):
       end,
   })
   ```
+
+### Implementation gotchas found the hard way (all hit, all verified)
+
+- **The layout_msg dispatcher is `hl.dsp.layout('<msg>')`** (source:
+  `LuaBindingsDispatchers.cpp`, `hlLayout`/`dsp_layoutMsg`, registered in
+  the `dsp` namespace). There is NO top-level `hl.layout(...)` function —
+  `hl.layout` is the *registration* table; calling it in a bind gives
+  `attempt to call a table value`. Also `hl.dsp.exec` does not exist —
+  it is `hl.dsp.exec_cmd('foot')`.
+- **`layout_msg` runs `recalculate()` itself after your callback returns**
+  (C++ side); a `false`/string return surfaces as a dispatch error.
+  Mutate state in `layout_msg`; don't call your own recalc.
+- **Dispatcher objects cannot be called directly** —
+  `hl.dsp.focus({...})()` fails with `dispatcher objects cannot be called
+  directly; use hl.dispatch(dispatcher)`. From inside `layout_msg`, move
+  focus with `hl.dispatch(hl.dsp.focus({ window = <HL.Window object> }))`.
+- **Window selectors in this build: pass the `HL.Window` userdata, not a
+  string.** `hl.dsp.focus({window = w.address})` and title strings both
+  fail with `hl.focus: window not found` for live visible windows;
+  `hl.dsp.focus({window = w})` works.
+- **A map-time recalc reports the PRE-MAP focused window as
+  `window.active`.** When window N maps, the recalc for it still shows N-1
+  as active (focus settles on N after the recalc, and no follow-up recalc
+  fires until the next event). Consequences:
+  - the correct "insert after the focused window" anchor is exactly the
+    `activeId` seen in that recalc (it IS the pre-map focus) — a
+    remembered last-active is wrong;
+  - any "sync remembered state to `activeId`" step must be skipped on
+    passes that inserted a new window, or it clobbers the new window's
+    focus mark.
+- **Lua multi-return-value collapse:** `local r = rec(...); if r then
+  return r end` returns only ONE value — a recursive tree search
+  returning `(node, parent, index)` silently degrades to `(node, nil, nil)`
+  for anything nested one level deep. Thread all values explicitly
+  (`local r, p, i = rec(...)`). This bug made every nested container look
+  empty to parent/index lookups.
+- **`hyprctl instances` output format:** `instance <sig>:` — the
+  signature line ends with a colon. `sed 's/^instance //; s/:$//'` when
+  capturing it; a stray colon makes `hyprctl -i` fail with a socket path
+  containing `:`.
+- **`pgrep -f "Hyprland -c"` / `pkill -f …` self-match:** your own shell
+  command line contains the pattern, so the kill list includes the shell
+  running the command (it dies mid-script, output truncated, side effects
+  partial). Kill nested instances by exact pid parsed from
+  `hyprctl instances` instead.
+- A brand-new nested instance's IPC socket is briefly unreachable
+  ("Couldn't connect … (4)") for a couple seconds after it appears in
+  `hyprctl instances` — retry, don't conclude it's hung.
+- If a nested instance's log reports `Output WAYLAND-1: pending state
+  rejected: invalid mode`, its windows stop mapping (clients connect,
+  tree stays empty). Just kill and restart it.
 
 ## Nested sway: starting and targeting
 
