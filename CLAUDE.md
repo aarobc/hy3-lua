@@ -32,6 +32,14 @@ approach in `~/dotfiles/hypr/fallback.lua`.
   the source of truth, including the surprising bits (no auto-wrap on
   plain open, workspace re-orientation on orthogonal moves, 1-child
   containers persist).
+- `notes/dual-monitor.md` — dual-display nested test environments (Xvnc +
+  sway X11 backend works; headless sway has broken seat focus; nested
+  Hyprland via `hyprctl output create wayland`) plus the verified
+  cross-monitor move/focus behavior spec (sway 1.12) and open questions.
+  Read before implementing dual-monitor window behavior. Batteries:
+  `sandbox/run-dual-sway.sh`, `sandbox/dualmove_battery.py`,
+  `sandbox/insert_battery.py`, `sandbox/tree_dump.py`; raw dumps in
+  `notes/dualmove-dumps/`.
 - `sandbox/hypr-nested.lua` — minimal nested Hyprland config; loads
   `layout.lua`, sets `layout = 'lua:sway'`, binds mod+hjkl to
   `hl.dsp.layout('focus …')`, mod+shift+hjkl to `hl.dsp.layout('move …')`,
@@ -43,6 +51,11 @@ approach in `~/dotfiles/hypr/fallback.lua`.
   against a running nested instance (expects `/tmp/nested-sig`). Clients
   are spawned via the instance's own `hl.dsp.exec_cmd` dispatch so they
   can never land on the host.
+- `sandbox/cross_battery.sh` — cross-monitor battery (M.*/X.*/F.* from
+  `notes/dual-monitor.md`) against a nested instance with a second fake
+  output (`hyprctl -i <sig> output create wayland`). Expects
+  `/tmp/nested-sig` + `/tmp/nested-wl` (nested wl socket, for safe
+  test-client kills).
 
 ## Current status
 
@@ -64,6 +77,20 @@ against real sway 1.12; case numbers refer to `notes/sway-spec.md`):
   descent into the container's remembered focused child.
 - Closure (C): proportional fraction renormalize; 1-child containers
   persist (child → frac 1.0); 0-child containers reaped (C.17–C.19).
+- Cross-monitor (dual-monitor.md §2, battery `sandbox/cross_battery.sh`,
+  all cases pass on a 2-output nested instance): `move` past the
+  workspace edge hands the window to the *adjacent monitor's active
+  workspace* (M.1/M.4 — even if empty, M.3); insertion at the entry
+  edge (right/down: index 0, left/up: end, M.1/X.1/M.1b) or at the
+  focused root child's index when the target root is perpendicular
+  (X.4); screen edge → no-op (M.2). `focus` past the edge crosses to
+  the geometrically nearest window (F.1, center-ratio distance),
+  empty target → no-op (F.2), screen edge → no-op (F.3). Crossing
+  BEATS wrap: wrap at the deepest parallel level is only the screen-
+  edge fallback (verified against sway F.1; single-monitor wrap
+  behavior is unchanged). Mechanism: tree is migrated first, then
+  `hl.dsp.window.move({workspace=<target name>, window=<HL.Window>,
+  follow=true})` moves the real window (see gotchas).
 
 **Fraction semantics** (mirrors sway arrange; in `normalize`): children
 with `frac <= 0` get the *average of the existing positive siblings'*
@@ -71,8 +98,15 @@ fractions — not `possum/total-count`, which gives 2/3·1/3 on the second
 open — then all fractions renormalize to sum 1 per parent level.
 
 **Known gaps / deliberate divergences:**
-- Cross-monitor hand-off on `move` past the workspace edge is a no-op
-  (sway would move the window to the adjacent output).
+- `move` past the edge of a workspace whose root is *perpendicular* to
+  the direction re-orients first (B.14) and does NOT cross in the same
+  tick; a *subsequent* edge move then crosses (sway-side behavior for
+  the promote-then-cross combination unverified — dual-monitor.md Q5).
+- Focus-cross "nearest window" is a center-ratio distance, not sway's
+  exact corner-based `con_closest_in_direction` (simple cases match,
+  complex trees unverified — Q3).
+- Vertical monitor adjacency (`position 0,720`) is implemented by the
+  same geometry code but has not been battery-tested (Q4).
 - Per-container `last_focus` is synced by recalcs plus our own
   focus/move/insert bookkeeping, but does NOT follow click-driven focus
   changes: a click into a non-last-focused branch, then a `move` into
@@ -301,6 +335,13 @@ Real sample (nested instance, 2 tiled `foot` windows):
 
 ### Implementation gotchas found the hard way (all hit, all verified)
 
+- **Cross-monitor window moves use `hl.dsp.window.move({workspace=..., window=..., follow=...})`** — verified working (moves the window, `follow=true` keeps focus on it). The legacy route does NOT work in Lua-config builds: `hl.dsp.exec_raw('movetoworkspace 2')` returns `ok` and silently does nothing. `hl.dsp.window.move({direction=...})` is a *mouse drag* (legacy `movewindow`), not a window move — don't confuse them.
+- **No shared coordinate space across workspaces/monitors.** On nested scale-2 outputs: `ctx.area` for ws1 = (20,20,191,215) but `hl.get_monitors()` reports WAYLAND-2 as x=468 w=461 while ws2's actual `ctx.area` = (488,20,191,215). Absolute pixel math across workspaces is wrong (it silently picks the wrong "nearest" window). Use scale-free center ratios (`centerRatios` in `layout.lua`); use monitor geometry ONLY for adjacency/ordering tests.
+- **`HL.Monitor` exposes `width`/`height`, not `w`/`h`** — `m.w` is `nil` and geometry comparisons silently never match.
+- **`hyprctl repl` return-value quirk:** a chunk whose last top-level statement is a `for` loop with an embedded `return` sometimes prints `ok` instead of the value; wrapping the logic in `local function f() ... end return f()` is reliable.
+- **`hyprctl instances` signature capture:** the line is `instance <sig>:` — `awk '{print $2}'` and `sed 's/^instance //; s/:$//'` both keep the colon (the `p` command prints before the second substitution runs). Use `sed -n 's/^instance \([^:]*\):$/\1/p'`.
+- **Cross-target active-workspace trap (M.4):** the cross target is the *target monitor's* active workspace at move time. If the source window sits on the target monitor's workspace (or any focus action first touches that monitor), the active ws switches back and the cross degenerates to `twid == wid` (no-op). Batteries must keep the crossing source on the OTHER monitor.
+
 - **The layout_msg dispatcher is `hl.dsp.layout('<msg>')`** (source:
   `LuaBindingsDispatchers.cpp`, `hlLayout`/`dsp_layoutMsg`, registered in
   the `dsp` namespace). There is NO top-level `hl.layout(...)` function —
@@ -376,6 +417,26 @@ swaymsg -s "$SOCK" move left
 
 Kill with `kill <pid>` when done — same caveat as Hyprland re: `pkill -f`
 and deleted config paths.
+
+### Dual outputs (for cross-monitor tests)
+
+A nested Wayland-backend sway sees ONE output (WL-1) regardless of the
+host's monitors. For dual-monitor work use the Xvnc + X11-backend setup —
+full details, gotchas and the behavior spec in `notes/dual-monitor.md`:
+
+```sh
+Xvnc :99 -geometry 2560x720 & echo $! > /tmp/xvnc.pid
+DISPLAY=:99 WLR_BACKENDS=x11 sway -c <config> &
+swaymsg -s <sock> create_output            # NOT 'output add'
+swaymsg -s <sock> 'output X11-1 mode 1280x720 position 0 0'
+swaymsg -s <sock> 'output X11-2 mode 1280x720 position 1280 0'
+```
+
+or just `sh sandbox/run-dual-sway.sh`. Headless sway (`WLR_BACKENDS=headless`)
+can make multiple outputs too, but has **no input devices**, so focus state
+desyncs and focus-dependent batteries give silently wrong results — use it
+never for anything focus-sensitive. Start a fresh sway per battery run
+(empty workspaces get destroyed/recreated and scramble the layout).
 
 ### Interpreting `get_tree`
 

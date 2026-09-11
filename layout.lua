@@ -17,8 +17,14 @@
 -- truth for structure and fractions.
 --
 -- Commands (bound via hl.layout('<msg>'), see sandbox/hypr-nested.lua):
---   move left|right|up|down      sway `move <dir>` (spec section B)
---   focus left|right|up|down     sway `focus <dir>` w/ wrapping (spec supp.)
+--   move left|right|up|down      sway `move <dir>` (spec section B);
+--                                past-the-end at the workspace edge does the
+--                                cross-output hand-off (notes/dual-monitor.md
+--                                M.1/M.3/M.4/X.1/X.4, M.2 screen-edge no-op)
+--   focus left|right|up|down     sway `focus <dir>` w/ wrapping (spec supp.);
+--                                past the edge crosses to the geometrically
+--                                nearest window on the adjacent monitor
+--                                (F.1), no-op at the screen edge (F.3)
 --   splitv | splith | togglesplit  spec section D
 
 local S = {} -- [ws id] = { layout = 'h'|'v', children = { nodes } }
@@ -139,6 +145,19 @@ local function setLastFocusPath(root, id)
     rec(root, root.children)
 end
 
+-- A prune can leave containers pointing at a removed window; drop stale
+-- last-focus marks so focusedChild() falls back to the last child.
+local function repairFocus(node)
+    if node.last_focus and not findLeaf(node, node.last_focus) then
+        node.last_focus = nil
+    end
+    for _, c in ipairs(node.children or {}) do
+        if c.kind == 'con' then
+            repairFocus(c)
+        end
+    end
+end
+
 -- ------------------------------------------------- fractions (spec A.3, C)
 
 -- Per-parent fraction pass, mirroring sway's arrange:
@@ -255,6 +274,9 @@ local function dbg(fmt, ...)
     end
 end
 
+-- [ws id] = last ctx.area, for scale/coord debugging (shared with swaydbg)
+local dbgareas = {}
+
 local function recalculate(ctx)
     local n = #ctx.targets
     if n == 0 then
@@ -269,6 +291,7 @@ local function recalculate(ctx)
         return
     end
     local root = getRoot(wid)
+    dbgareas[wid] = { x = ctx.area.x, y = ctx.area.y, w = ctx.area.w, h = ctx.area.h }
 
     local live = {}
     for id in pairs(targets) do
@@ -299,6 +322,7 @@ local function recalculate(ctx)
         end
     end
     pruneDead(root.children)
+    repairFocus(root)
 
     -- 2. new window: sibling immediately after the focused window in its
     --    innermost container (spec A.2 / rule a.2); never auto-wrapped.
@@ -386,8 +410,212 @@ local function insertNextTo(root, leaf, T, par, delta)
     end
 end
 
+-- ------------------------------------------------- cross-monitor (M.*/F.*)
+
+-- The index in `root.children` of the child on the remembered last-focus
+-- path (fallback: last child).
+local function focusedRootIndex(root)
+    if root.last_focus then
+        for i, c in ipairs(root.children) do
+            if (c.kind == 'win' and c.id == root.last_focus)
+                or (c.kind == 'con' and findLeaf(c, root.last_focus)) then
+                return i
+            end
+        end
+    end
+    return #root.children
+end
+
+-- Center of `leaf` as a (0..1) ratio of the root box, from cumulative
+-- main-axis fractions. Scale-free: workspaces' ctx.area spaces do NOT
+-- share a coordinate scale with each other (or with hl.get_monitors()
+-- geometry) -- verified on nested scale-2 outputs -- so cross-monitor
+-- "nearest window" picks must compare ratios, not absolute pixels (F.1).
+local function centerRatios(root, leaf)
+    local function rec(children, orient, x0, y0, x1, y1)
+        local x, y = x0, y0
+        for _, c in ipairs(children) do
+            local bw, bh
+            if orient == 'h' then
+                bw, bh = (x1 - x0) * c.frac, (y1 - y0)
+            else
+                bw, bh = (x1 - x0), (y1 - y0) * c.frac
+            end
+            local cx0, cy0 = x, y
+            local cx1, cy1 = x + bw, y + bh
+            if c == leaf then
+                return (cx0 + cx1) / 2, (cy0 + cy1) / 2
+            end
+            if c.kind == 'con' then
+                local r, t = rec(c.children, c.orient, cx0, cy0, cx1, cy1)
+                if r then
+                    return r, t
+                end
+            end
+            if orient == 'h' then
+                x = x + bw
+            else
+                y = y + bh
+            end
+        end
+        return nil
+    end
+    return rec(root.children, root.layout, 0, 0, 1, 1)
+end
+
+-- The monitor in `dir`'s direction sharing an edge with `m` (nil at the
+-- screen edge). Overlap test on the other axis, adjacency on this one.
+-- Monitor geometry is used ONLY for this adjacency/ordering test, never
+-- for layout math (see centerRatios).
+local function findAdjacentMonitor(m, dir)
+    local cands = {}
+    for _, mo in ipairs(hl.get_monitors()) do
+        if mo.id ~= m.id then
+            local mw, mh = m.width, m.height
+            local ok
+            if dir == 'right' then
+                ok = mo.x >= m.x + mw and mo.y < m.y + mh and m.y < mo.y + mo.height
+            elseif dir == 'left' then
+                ok = m.x >= mo.x + mo.width and mo.y < m.y + mh and m.y < mo.y + mo.height
+            elseif dir == 'down' then
+                ok = mo.y >= m.y + mh and mo.x < m.x + mw and m.x < mo.x + mo.width
+            else
+                ok = m.y >= mo.y + mo.height and mo.x < m.x + mw and m.x < mo.x + mo.width
+            end
+            if ok then
+                cands[#cands + 1] = mo
+            end
+        end
+    end
+    if #cands == 0 then
+        return nil
+    end
+    table.sort(cands, function(a, b)
+        local da = math.abs(a.x - (m.x + m.width)) + math.abs(a.y - (m.y + m.height))
+        local db = math.abs(b.x - (m.x + m.width)) + math.abs(b.y - (m.y + m.height))
+        return da < db
+    end)
+    return cands[1]
+end
+
+-- Move the edge `leaf` to the active workspace of the adjacent monitor
+-- (M.1/M.3/M.4). Insertion rules:
+--   target root parallel to the move  -> entry edge (right/down: index 0,
+--                                         left/up: end)  (M.1/X.1/M.1b)
+--   target root perpendicular         -> at the focused root child's index
+--                                        (X.4)
+--   empty target                      -> sole child  (M.3)
+local function doCross(ctx, wid, leaf, leafWin, dir)
+    local par = parOf(dir)
+    local delta = deltaOf(dir)
+    local m = leafWin and leafWin.monitor
+    if not m then
+        return true
+    end
+    local adj = findAdjacentMonitor(m, dir)
+    if not adj then
+        return true -- screen edge: no-op (M.2)
+    end
+    local tws = adj.active_workspace
+    if not tws or not tws.id then
+        return true
+    end
+    local twid = tws.id
+    if twid == wid then
+        return true
+    end
+    -- pull the leaf out of the source tree, keep fractions consistent
+    local root = S[wid]
+    removeNode(root, leaf)
+    repairFocus(root)
+    normalizeAll(root.children)
+
+    -- insert into the target workspace's tree
+    local troot = getRoot(twid)
+    leaf.frac = 0
+    if #troot.children == 0 then
+        table.insert(troot.children, leaf)
+    elseif orientOf(troot) == par then
+        if delta > 0 then
+            table.insert(troot.children, 1, leaf)
+        else
+            table.insert(troot.children, leaf)
+        end
+    else
+        local fi = focusedRootIndex(troot)
+        table.insert(troot.children, fi + (delta > 0 and 0 or 1), leaf)
+    end
+    setLastFocusPath(troot, leaf.id)
+    repairFocus(troot)
+    normalizeAll(troot.children)
+    dbg('cross %s ws%d -> ws%d', tostring(leaf.id), wid, twid)
+
+    -- actually move the window to the target workspace. First-class API
+    -- (legacy 'movetoworkspace' via exec_raw silently no-ops in
+    -- Lua-config builds). The tree is mutated BEFORE the move so the
+    -- target workspace's post-move recalc finds the leaf already at its
+    -- planned slot instead of inserting it at the focus anchor.
+    -- follow=true: focus follows the moved window (M.1).
+    hl.dispatch(hl.dsp.window.move({ workspace = tostring(tws.name), window = leafWin, follow = true }))
+    return true
+end
+
+-- `focus <dir>` past the workspace edge: cross to the geometrically
+-- nearest window on the adjacent monitor's active workspace (F.1);
+-- empty target workspace or screen edge -> no-op (F.2/F.3).
+local function doFocusCross(ctx, wid, leaf, dir, targets)
+    local win = targets[leaf.id]
+    local m = win and win.window and win.window.monitor
+    if not m then
+        return true
+    end
+    local adj = findAdjacentMonitor(m, dir)
+    if not adj then
+        return nil -- F.3: no adjacent monitor; caller falls back to wrap
+    end
+    local tws = adj.active_workspace
+    if not tws or not tws.id then
+        return true
+    end
+    local troot = S[tws.id]
+    if not troot or #troot.children == 0 then
+        return true -- F.2: empty target focuses the workspace node
+    end
+    -- geometrically nearest window, compared in scale-free center ratios
+    -- (see centerRatios: no absolute coordinate space is shared between
+    -- the two workspaces).
+    local sx, sy = centerRatios(S[wid], leaf)
+    local bestd, bestid
+    local function pick(children)
+        for _, c in ipairs(children) do
+            if c.kind == 'win' then
+                local cx, cy = centerRatios(troot, c)
+                local d = (cx - sx) ^ 2 + (cy - sy) ^ 2
+                if not bestd or d < bestd then
+                    bestd, bestid = d, c.id
+                end
+            else
+                pick(c.children)
+            end
+        end
+    end
+    pick(troot.children)
+    if not bestid then
+        return true
+    end
+    setLastFocusPath(troot, bestid)
+    for _, w in ipairs(hl.get_windows()) do
+        if w.stable_id == bestid and w.workspace and w.workspace.id == tws.id then
+            hl.dispatch(hl.dsp.focus({ window = w }))
+            break
+        end
+    end
+    dbg('focuscross ws%d -> ws%d win %s', wid, tws.id, tostring(bestid))
+    return true
+end
+
 local function doMove(ctx, dir)
-    local wid, fid = prep(ctx)
+    local wid, fid, targets = prep(ctx)
     local root = wid and S[wid] or nil
     if not root or not fid then
         return 'sway: no focused window'
@@ -448,9 +676,10 @@ local function doMove(ctx, dir)
         end
     else
         if C == leaf and P == root then
-            -- past-the-end at workspace level: sway would attempt a
-            -- cross-output hand-off; single-monitor here -> no-op (B.13)
-            return true
+            -- past-the-end at workspace level: cross-output hand-off if an
+            -- adjacent monitor exists (M.1); screen edge -> no-op (M.2)
+            local t = targets[fid]
+            return doCross(ctx, wid, leaf, t and t.window, dir)
         end
         -- promotion: mover becomes a child of P next to its own parent
         -- container; mover's and the container's fractions reset (B.10).
@@ -504,6 +733,14 @@ local function doFocus(ctx, dir)
         C = P
     end
     if not target then
+        -- past the workspace edge: crossing an adjacent monitor beats
+        -- wrapping (F.1 -- edge focus goes to the nearest window on the
+        -- next monitor, NOT back to the opposite end); only at the true
+        -- screen edge (no adjacent monitor) does the fallback become a
+        -- wrap at the deepest parallel level.
+        if doFocusCross(ctx, wid, leaf, dir, targets) then
+            return true
+        end
         if not deepest then
             return true
         end
@@ -593,6 +830,7 @@ hl.layout.register('sway', {
 -- debug: `hyprctl -i <sig> repl 'return swaydbg.dump()'`
 _G.swaydbg = {
     state = S,
+    areas = dbgareas,
     dump = function()
         local out = {}
         for wid, root in pairs(S) do
