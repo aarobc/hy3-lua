@@ -277,9 +277,31 @@ end
 -- [ws id] = last ctx.area, for scale/coord debugging (shared with swaydbg)
 local dbgareas = {}
 
+-- Drop the remembered trees of workspaces that have no live tiled
+-- windows (they keep their root layout; sway keeps empty-workspace
+-- orientation). Called from the empty-targets recalc and from
+-- swaydbg.dump(): closing the LAST window on a workspace triggers no
+-- recalc at all, so the dead tree would otherwise linger in S until
+-- the next window opens (invisible except through the debug dump).
+local function pruneEmptyWorkspaces()
+    local liveWs = {}
+    for _, w in ipairs(hl.get_windows()) do
+        if w.workspace and not w.floating then
+            liveWs[w.workspace.id] = true
+        end
+    end
+    for wid in pairs(S) do
+        if not liveWs[wid] then
+            local r = S[wid]
+            S[wid] = { layout = r and r.layout or 'h', children = {} }
+        end
+    end
+end
+
 local function recalculate(ctx)
     local n = #ctx.targets
     if n == 0 then
+        pruneEmptyWorkspaces()
         return
     end
     local wid, activeId, targets = prep(ctx)
@@ -832,6 +854,7 @@ _G.swaydbg = {
     state = S,
     areas = dbgareas,
     dump = function()
+        pruneEmptyWorkspaces()
         local out = {}
         for wid, root in pairs(S) do
             out[#out + 1] = string.format('ws %d layout=%s', wid, root.layout)

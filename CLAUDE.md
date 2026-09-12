@@ -22,6 +22,13 @@ approach in `~/dotfiles/hypr/fallback.lua`.
 ## Directory layout
 
 - `CLAUDE.md` — this file.
+- `environment/` — Docker test environment (see "Docker test
+  environment" below): `Dockerfile` (base + sway + hyprland stages),
+  `compose.yml` (one service per WM), `entrypoint.sh`,
+  `patches/0001-aquamarine-headless-render-node-fallback.patch` (the
+  only non-packaged piece; lets the mandatory headless backend build
+  its GBM allocator from — and its renderer find — a passed-through
+  render node; see the hyprland service notes below).
 - `layout.lua` — the `hl.layout.register("sway", {...})` implementation.
   Complete: n-ary tree state, movement, splits, focus, closure (see
   "Current status"). Loaded by the sandbox config; debug hooks in
@@ -32,11 +39,11 @@ approach in `~/dotfiles/hypr/fallback.lua`.
   the source of truth, including the surprising bits (no auto-wrap on
   plain open, workspace re-orientation on orthogonal moves, 1-child
   containers persist).
-- `notes/dual-monitor.md` — dual-display nested test environments (Xvnc +
-  sway X11 backend works; headless sway has broken seat focus; nested
-  Hyprland via `hyprctl output create wayland`) plus the verified
-  cross-monitor move/focus behavior spec (sway 1.12) and open questions.
-  Read before implementing dual-monitor window behavior. Batteries:
+- `notes/dual-monitor.md` — the verified cross-monitor move/focus
+  behavior spec (sway 1.12) + the legacy nested/Xvnc test environments
+  that have been superseded by the Docker setup in `environment/` (setup sections are
+  obsolete; the behavior spec still applies). Read before
+  implementing dual-monitor window behavior. Batteries:
   `sandbox/run-dual-sway.sh`, `sandbox/dualmove_battery.py`,
   `sandbox/insert_battery.py`, `sandbox/tree_dump.py`; raw dumps in
   `notes/dualmove-dumps/`.
@@ -47,15 +54,19 @@ approach in `~/dotfiles/hypr/fallback.lua`.
   mod+q to close.
 - `sandbox/sway-nested.config` — matching nested sway config (same
   keybinds, plus mod+v/s/t for split parity).
-- `sandbox/battery.sh`, `sandbox/battery2.sh` — spec-case test sequences
-  against a running nested instance (expects `/tmp/nested-sig`). Clients
-  are spawned via the instance's own `hl.dsp.exec_cmd` dispatch so they
-  can never land on the host.
+- `sandbox/battery.sh`, `sandbox/battery2.sh` — spec-case test
+  sequences (notes/sway-spec.md A/B/C) that run INSIDE the hyprland
+  service (the sandbox is mounted at `/root/code/hy3-lua`): `docker
+  compose exec -T hyprland bash /root/code/hy3-lua/sandbox/battery.sh`
+  (and `battery2.sh`). They self-reset (close all windows first) and
+  spawn clients via the instance's own `hl.dsp.exec_cmd` dispatch so
+  they can never land on the host.
 - `sandbox/cross_battery.sh` — cross-monitor battery (M.*/X.*/F.* from
-  `notes/dual-monitor.md`) against a nested instance with a second fake
-  output (`hyprctl -i <sig> output create wayland`). Expects
-  `/tmp/nested-sig` + `/tmp/nested-wl` (nested wl socket, for safe
-  test-client kills).
+  `notes/dual-monitor.md`), also run inside the service; it sets up the
+  second headless output itself (`output create headless HEADLESS-2`
+  + `hl.monitor` mode/position). Run against a FRESH container — the
+  cross target is the adjacent monitor's active workspace, and a
+  workspace's remembered orientation survives between runs.
 
 ## Current status
 
@@ -77,6 +88,10 @@ against real sway 1.12; case numbers refer to `notes/sway-spec.md`):
   descent into the container's remembered focused child.
 - Closure (C): proportional fraction renormalize; 1-child containers
   persist (child → frac 1.0); 0-child containers reaped (C.17–C.19).
+  Note: closing the LAST window on a workspace triggers no recalc at
+  all, so the dead tree lingers in `S` until the next event; it is
+  reaped by `pruneEmptyWorkspaces()` (called from the empty-targets
+  recalc and from `swaydbg.dump()`, which otherwise shows a stale tree).
 - Cross-monitor (dual-monitor.md §2, battery `sandbox/cross_battery.sh`,
   all cases pass on a 2-output nested instance): `move` past the
   workspace edge hands the window to the *adjacent monitor's active
@@ -123,93 +138,117 @@ open — then all fractions renormalize to sum 1 per parent level.
 - Start the nested instance as `HY3_DEBUG_LOG=/tmp/hy3-swdbg.log Hyprland
   -c …` for a per-recalc log (targets, active id, inserts).
 
-## Why nested instances
+## Docker test environment (`environment/`)
 
-Both Hyprland and sway can run as ordinary Wayland clients inside the
-existing live Hyprland session (`$WAYLAND_DISPLAY` is already set, e.g.
-`wayland-1`). This gets a disposable compositor to test against without
-touching the real desktop or real windows. Confirmed working on this
-machine (Hyprland 0.56.2, sway 1.12) as of this writing.
+Both WMs run in containers. **All interaction is via IPC** — `swaymsg`
+for sway, `hyprctl` for Hyprland. There are no input devices and no
+keybinding emulation at all: tests open `foot` windows via
+`swaymsg exec foot` / `hl.dsp.exec` and drive focus/move/split with
+explicit IPC commands.
 
-**Always clean up nested instances when done** — `kill <pid>` them
-explicitly. `pkill -f <config-path>` is convenient but only matches while
-the config file still exists at that path; if you delete/move the config
-first, the process cmdline no longer matches and `pkill -f` silently does
-nothing while claiming success. Verify with `hyprctl instances` /
-`pgrep -fa sway` afterward, not just by checking pkill's exit code.
+- `environment/Dockerfile` — **archlinux:latest** base (arch `extra`
+  ships exact host versions: sway **1.12**, Hyprland **v0.56.2** —
+  no source builds needed for either WM). Three stages: `base` (arch
+  + foot/seatd/fonts), `sway` (packaged sway), `hyprland` (packaged
+  Hyprland + the *only* source build: aquamarine 0.15.0 from the
+  Arch PKGBUILD tarball with the headless render-node fallback patch,
+  installed over the packaged lib). Source *fetch* and source *build*
+  are separate layers, so build-only failures reuse the cached
+  download. **No input devices, no uinput, no keybinding emulation —
+  by design:** everything is driven over IPC.
+- `environment/compose.yml` — `sway` and `hyprland` services. Each has
+  its own named runtime volume mounted at `/run/user/1000` so the IPC +
+  Wayland sockets survive across `exec`/`run` invocations. Configs are
+  bind-mounted read-only from `sandbox/`; the hyprland image also gets
+  the whole repo at `/root/code/hy3-lua:ro` (on `package.path`) so
+  `require('layout')` resolves. The hyprland service passes the host's
+  world-readable render node in (`devices:`). **Edit a config →
+  `docker compose restart <svc>`; no rebuild.**
+- `environment/entrypoint.sh` — sets `XDG_RUNTIME_DIR`, starts `seatd`
+  (when running a WM), execs the command.
 
-**Run at most ONE nested instance at a time** (sway or Hyprland) unless a
-test genuinely needs two side by side. Kill the previous one (exact pid)
-before starting the next; leftovers pile up on `wayland-2`/`3`/... and
-steal sockets.
-
-**Spawn test clients INTO the nested instance, never onto the host.**
-Shell-spawning `foot &` with a stale/empty `WAYLAND_DISPLAY` silently
-lands the window on the host's active workspace (popping up on the user's
-cursor) and corrupts the test. Canonical ways to spawn a client, all of
-which target the nested instance's own active workspace:
-- Hyprland: `hyprctl -i <sig> dispatch 'hl.dsp.exec("foot")'`
-- sway: `swaymsg -s <SOCK> exec foot`
-Only if you must shell-spawn, verify the socket variable is non-empty AND
-belongs to the live instance first (`test -S /run/user/1001/<sock>` and
-match it against `hyprctl instances`), and after spawning confirm the
-window actually appeared via `hyprctl -i <sig> -j clients` / `get_tree` —
-not via the "no error" of the spawn command.
-
-**Never `pkill -x foot` (or any broad pkill of user-visible apps)** — it
-kills the user's real terminals, including the one this session runs in.
-To sweep nested test clients, iterate `pgrep -x foot` and kill only PIDs
-whose `/proc/<pid>/environ` contains the nested instance's
-`WAYLAND_DISPLAY=<socket>`.
-
-## Nested Hyprland: starting and targeting
+Build and run:
 
 ```sh
-Hyprland -c ~/code/hy3-lua/sandbox/hypr-nested.lua &
-sleep 1
-hyprctl instances        # find the new one — matches by pid/start time
+cd environment
+docker compose build                        # both services; the hyprland
+                                            # stage compiles aquamarine (~2 min)
+docker compose up -d sway hyprland          # or just one
 ```
 
-Output looks like:
-
-```
-instance <sig>:
-	time: ...
-	pid: 369005
-	wl socket: wayland-2
-```
-
-Target every subsequent `hyprctl` call at it with `-i <sig>` (signature or
-index into the `instances` list, e.g. `-i 1`). Spawn clients into it via
-`WAYLAND_DISPLAY=<its wl socket> foot &` (or any Wayland-native app).
+Interact — every command runs in the service's container, against its
+sockets:
 
 ```sh
-SIG=<signature from hyprctl instances>
-WAYLAND_DISPLAY=wayland-2 foot &
-WAYLAND_DISPLAY=wayland-2 foot &
-hyprctl -i "$SIG" -j clients
-hyprctl -i "$SIG" -j monitors
-hyprctl -i "$SIG" -j workspaces
-hyprctl -i "$SIG" dispatch 'hl.dsp.window.move({direction="right"})'
+docker compose exec sway swaymsg -t get_tree
+docker compose run --rm hyprland hyprctl clients    # one-shot: same volume, same sockets
 ```
 
-Kill it when done: `kill <pid>` (pid from the `instances` output, or from
-the `&` job you started it with).
+Service notes:
+
+- **sway** — `swaymsg` in the image is a wrapper that globs the IPC
+  socket (plain `swaymsg` without `-s` cannot find it in the container).
+  The headless backend auto-creates ONE `HEADLESS-1` output; the service
+  command only sets its mode — do not `create_output` at startup (you'd
+  get a phantom second output). For cross-monitor work:
+  `swaymsg create_output` + `swaymsg 'output HEADLESS-2 mode 1280x720 position 1280 0'`.
+  Headless sway has **no seat**: nothing auto-focuses new windows. Tests
+  that depend on focus must issue explicit `swaymsg focus` (e.g. after
+  `swaymsg exec foot` → `swaymsg focus window "foot"`).
+- **hyprland** — the service command starts Hyprland, then creates
+  `HEADLESS-1` via IPC (`hyprctl output create headless HEADLESS-1` +
+  `hyprctl repl 'hl.monitor({output = "HEADLESS-1", mode = "1280x720"})'`
+  — 0.56.2's headless outputs only ship 1920x1080 by default, so the
+  patched aquamarine adds 1280x720 to the mode list).
+  v0.56 **mandates** aquamarine's headless backend
+  (`AQ_BACKEND_HEADLESS` MANDATORY in `Compositor.cpp`), but even headless
+  it needs a **DRM render node** for its GBM allocator *and* its
+  renderer's GBM/EGL path, and the headless backend reports none
+  (`CHeadlessBackend::drmFD()`/`drmRenderNodeFD()` are -1) → packaged
+  Hyprland dies at `CBackend::create() failed!` / "no allocator
+  available" (verified: same failure with or without `/dev/dri`
+  passthrough). Two pieces make it run:
+    1. `environment/patches/0001-…render-node-fallback.patch` — applied
+       to aquamarine 0.15.0 at build time. Three hunks: (a) when no
+       backend provides a DRM fd, `CBackend::start()` scans
+       `/dev/dri/renderD*` and builds the GBM allocator from the first
+       one that opens; (b) `CHeadlessBackend::drmRenderNodeFD()`
+       reports the same scanned render node so Hyprland's renderer
+       (`CHyprOpenGLImpl::openRenderNode`) can create its GBM/EGL
+       display — without this it RASSERTs at init; (c) the headless
+       output exposes a 1280x720 mode in addition to 1920x1080.
+    2. the compose service passes the host's world-readable render node
+       in: `devices: [/dev/dri/renderD128]` (do NOT pass `/dev/dri`
+       wholesale / a card — a second DRM owner would fight the host
+       compositor for the actual outputs). The GL stack then runs real
+       i915/EGL inside the container (verified: GL ES 3.2 + complete
+       FBOs).
+  Hyprland also refuses to run as root without
+  `--i-am-really-stupid` (it runs as root in the container).
+
+Cleanup: `docker compose down` (add `-v` to also drop the runtime
+volumes). The images are `hy3-sway` / `hy3-hyprland`.
 
 ### Querying / calling into the running Lua config
 
-`hyprctl -i "$SIG" eval '<lua>'` runs arbitrary Lua **but only ever prints
-the literal string `ok`, never a return value** — historically the only
+**`hyprctl` in the image is a wrapper** that auto-resolves the instance
+signature (newest dir under `$XDG_RUNTIME_DIR/hypr/`) and execs
+`/usr/bin/hyprctl -i <sig>` — bare `hyprctl …` just works in
+`docker compose exec/run hyprland`.
+
+`hyprctl eval '<lua>'` runs arbitrary Lua **but only ever prints the
+literal string `ok`, never a return value** — historically the only
 way to get data out was writing it to a file inside the eval and `cat`ing
 that file afterward.
 
-**Better, verified on this build:** `hyprctl -i "$SIG" repl '<lua>'` DOES
-print the return value directly:
+**Better, verified on this build:** `hyprctl repl '<lua>'` DOES
+print the return value directly (0.56.2's `evalRequest` routes
+`repl`-prefixed requests through `luaMgr->eval(code, isRepl=true)`):
 
 ```sh
 $ hyprctl repl 'return 1+1'
 2
-$ hyprctl -i "$SIG" repl 'return #hl.get_windows()'
+$ hyprctl repl 'return #hl.get_windows()'
 2
 ```
 
@@ -335,6 +374,10 @@ Real sample (nested instance, 2 tiled `foot` windows):
 
 ### Implementation gotchas found the hard way (all hit, all verified)
 
+The items marked *legacy-nested* only apply to the old in-session
+nested-instance workflow (still fine to know); the rest apply to the
+Docker environment and the live session alike.
+
 - **Cross-monitor window moves use `hl.dsp.window.move({workspace=..., window=..., follow=...})`** — verified working (moves the window, `follow=true` keeps focus on it). The legacy route does NOT work in Lua-config builds: `hl.dsp.exec_raw('movetoworkspace 2')` returns `ok` and silently does nothing. `hl.dsp.window.move({direction=...})` is a *mouse drag* (legacy `movewindow`), not a window move — don't confuse them.
 - **No shared coordinate space across workspaces/monitors.** On nested scale-2 outputs: `ctx.area` for ws1 = (20,20,191,215) but `hl.get_monitors()` reports WAYLAND-2 as x=468 w=461 while ws2's actual `ctx.area` = (488,20,191,215). Absolute pixel math across workspaces is wrong (it silently picks the wrong "nearest" window). Use scale-free center ratios (`centerRatios` in `layout.lua`); use monitor geometry ONLY for adjacency/ordering tests.
 - **`HL.Monitor` exposes `width`/`height`, not `w`/`h`** — `m.w` is `nil` and geometry comparisons silently never match.
@@ -391,52 +434,36 @@ Real sample (nested instance, 2 tiled `foot` windows):
   rejected: invalid mode`, its windows stop mapping (clients connect,
   tree stays empty). Just kill and restart it.
 
-## Nested sway: starting and targeting
+## Sway: interacting
+
+Sway runs in its compose service (see "Docker test environment"); its
+config is `sandbox/sway-nested.config` bind-mounted at
+`/config/sway-nested.config`. All commands go through the IPC:
 
 ```sh
-sway -c ~/code/hy3-lua/sandbox/sway-nested.config &
-sleep 1
+docker compose exec sway swaymsg -t get_tree
+docker compose exec sway sh -c 'swaymsg exec foot'          # into the running WM
+docker compose run --rm sway swaymsg focus window "foot"    # one-shot, same socket
 ```
 
-sway prints its IPC socket path to `--get-socketpath` or you can find it
-directly:
+Dual outputs (cross-monitor tests) are created at test time on the
+headless backend:
 
 ```sh
-ls /run/user/$(id -u)/sway-ipc.*
+docker compose exec sway sh -c 'swaymsg create_output \
+  && swaymsg "output HEADLESS-2 mode 1280x720 position 1280 0"'
 ```
 
-Target every `swaymsg` call at that socket with `-s`:
+The old nested/Xvnc workflows in `notes/dual-monitor.md` are
+superseded for setup purposes (the behavioral spec in that file still
+applies). The battery scripts under `sandbox/` run inside the docker
+services (see the directory layout above).
 
-```sh
-SOCK=/run/user/1001/sway-ipc.1001.<pid>.sock
-WAYLAND_DISPLAY=<its wayland socket, e.g. wayland-3> foot &
-swaymsg -s "$SOCK" -t get_tree
-swaymsg -s "$SOCK" splitv
-swaymsg -s "$SOCK" move left
-```
-
-Kill with `kill <pid>` when done — same caveat as Hyprland re: `pkill -f`
-and deleted config paths.
-
-### Dual outputs (for cross-monitor tests)
-
-A nested Wayland-backend sway sees ONE output (WL-1) regardless of the
-host's monitors. For dual-monitor work use the Xvnc + X11-backend setup —
-full details, gotchas and the behavior spec in `notes/dual-monitor.md`:
-
-```sh
-Xvnc :99 -geometry 2560x720 & echo $! > /tmp/xvnc.pid
-DISPLAY=:99 WLR_BACKENDS=x11 sway -c <config> &
-swaymsg -s <sock> create_output            # NOT 'output add'
-swaymsg -s <sock> 'output X11-1 mode 1280x720 position 0 0'
-swaymsg -s <sock> 'output X11-2 mode 1280x720 position 1280 0'
-```
-
-or just `sh sandbox/run-dual-sway.sh`. Headless sway (`WLR_BACKENDS=headless`)
-can make multiple outputs too, but has **no input devices**, so focus state
-desyncs and focus-dependent batteries give silently wrong results — use it
-never for anything focus-sensitive. Start a fresh sway per battery run
-(empty workspaces get destroyed/recreated and scramble the layout).
+The batteries re-verified in the docker environment (fresh container):
+`battery.sh` (A/B/C cases), `battery2.sh` (promotion, workspace
+re-orientation, collapse) and `cross_battery.sh` (all M.*/X.*/F.* cases,
+including X.4 perpendicular-root insertion and F.1 nearest-window
+cross) pass.
 
 ### Interpreting `get_tree`
 
@@ -514,16 +541,17 @@ emulated, not the workaround `fallback.lua` and its `armed`/`preselect`/
 
 ## Comparison workflow
 
-1. Start both nested instances side by side (different Wayland sockets, so
-   they render as separate windows in the live session — move them next to
-   each other).
-2. Reproduce the same sequence of opens/moves/splits in both, using the
-   matching keybinds from `sandbox/hypr-nested.lua` /
+1. `docker compose up -d sway hyprland` in `environment/` — both WMs
+   run independently; no host session is involved at all.
+2. Reproduce the same sequence of opens/moves/splits in both via IPC
+   (`swaymsg exec foot` + `swaymsg move/splitv/focus …` vs.
+   `hl.dsp.exec` + `hl.dsp.layout('…')` dispatches), mirroring the
+   keybinds in `sandbox/hypr-nested.lua` /
    `sandbox/sway-nested.config`.
-3. Dump `swaymsg -t get_tree` and `hyprctl -j clients` after each step;
-   diff geometry/nesting by hand. Save interesting dumps under a scratch
-   subdirectory (not created yet — make one, e.g. `notes/`, if a comparison
-   is worth keeping around) rather than losing them.
-4. When `layout.lua` is far enough along to test, point
-   `sandbox/hypr-nested.lua` at it (uncomment the `require` lines) instead
-   of comparing against stock dwindle.
+3. Dump `swaymsg -t get_tree` and `hyprctl -j clients` (or
+   `swaydbg.dump()` from the Lua side) after each step; diff
+   geometry/nesting. Save interesting dumps under `notes/` (dual-move
+   raw dumps live in `notes/dualmove-dumps/`).
+4. `sandbox/hypr-nested.lua` already loads `layout.lua`; to compare
+   against stock dwindle instead, flip `layout = 'lua:sway'` back to
+   `'dwindle'` in that file and `docker compose restart hyprland`.

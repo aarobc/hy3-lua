@@ -1,5 +1,12 @@
 # Dual-monitor testing environments + sway cross-monitor behavior
 
+> **Setup note (superseded):** the nested/Xvnc *environments* described
+> below have been replaced by the Docker setup in `environment/`
+> (headless sway + headless Hyprland, pure-IPC interaction, dual outputs
+> via `swaymsg create_output` / `hyprctl output create headless`). The
+> **behavioral spec** (sway 1.12 cross-monitor move/focus/insert rules,
+> verified against a real sway) is still the source of truth.
+
 Research for the next step of `layout.lua`: emulating sway's window behavior
 across monitors (edge moves with/without an adjacent monitor, insertion
 rules on the far side). Everything below was verified hands-on on this

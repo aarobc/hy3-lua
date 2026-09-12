@@ -1,5 +1,7 @@
--- Minimal nested Hyprland config for hy3-lua comparison testing.
--- Launch with: Hyprland -c ~/code/hy3-lua/sandbox/hypr-nested.lua
+-- Hyprland config for hy3-lua testing. Runs inside the docker test
+-- environment: docker compose up -d hyprland (see ../environment/).
+-- The repo is mounted at /root/code/hy3-lua, so `require('layout')`
+-- resolves via HOME=/root.
 -- See ../CLAUDE.md for the full workflow.
 
 package.path = package.path .. ';' .. os.getenv('HOME') .. '/code/hy3-lua/?.lua'

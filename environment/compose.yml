@@ -1,0 +1,82 @@
+# hy3-lua test environment.
+#
+# Both services run their WM headless (WLR_BACKENDS=headless, WLR headless
+# backend). All interaction is through the compositor IPC — no input
+# devices. Sockets (wayland + IPC) live on a shared XDG_RUNTIME_DIR volume,
+# so one-shot containers reach the running compositor:
+#
+#   docker compose up -d sway                    # start the WM (long-running)
+#   docker compose exec sway swaymsg -t get_tree
+#   docker compose run --rm sway swaymsg -t get_tree   # one-shot, same socket
+#   docker compose run --rm hyprland hyprctl clients
+#   docker compose restart sway                  # reload configs after edits
+#   docker compose down                           # stop everything
+#
+# Configs are bind-mounted from ../sandbox, and layout.lua comes in via the
+# read-only repo mount — edit those files and restart the service instead of
+# rebuilding the image.
+
+name: hy3-lua
+
+services:
+  sway:
+    build:
+      context: ..
+      dockerfile: environment/Dockerfile
+      target: sway
+    image: hy3-sway
+    command:
+      - sh
+      - -c
+      - |
+        sway -c /config/sway-nested.config &
+        for i in $(seq 1 20); do
+            swaymsg -t outputs >/dev/null 2>&1 && break
+            sleep 0.5
+        done
+        # headless sway auto-creates a single HEADLESS-1 output; just give it
+        # a fixed mode (an explicit `create_output` would add a SECOND one)
+        swaymsg 'output HEADLESS-1 mode 1280x720'
+        wait
+    environment:
+      XDG_RUNTIME_DIR: /run/user/1000
+    volumes:
+      - sway-runtime:/run/user/1000
+      - ../sandbox/sway-nested.config:/config/sway-nested.config:ro
+    cap_add:
+      - SYS_NICE
+
+  hyprland:
+    build:
+      context: ..
+      dockerfile: environment/Dockerfile
+      target: hyprland
+    image: hy3-hyprland
+    command:
+      - sh
+      - -c
+      - |
+        Hyprland --i-am-really-stupid -c /config/hypr-nested.lua &
+        for i in $(seq 1 40); do
+            hyprctl version >/dev/null 2>&1 && break
+            sleep 0.5
+        done
+        hyprctl output create headless HEADLESS-1
+        hyprctl repl 'hl.monitor({output = "HEADLESS-1", mode = "1280x720"})'
+        wait
+    environment:
+      XDG_RUNTIME_DIR: /run/user/1000
+      HY3_DEBUG_LOG: /tmp/hy3-swdbg.log
+    devices:
+      # the (mandatory) aquamarine headless backend still needs a DRM
+      # render node for its GBM allocator; the host's world-readable
+      # render node is enough (Intel/AMD both expose one)
+      - /dev/dri/renderD128
+    volumes:
+      - hypr-runtime:/run/user/1000
+      - ../sandbox/hypr-nested.lua:/config/hypr-nested.lua:ro
+      - ..:/root/code/hy3-lua:ro
+
+volumes:
+  sway-runtime:
+  hypr-runtime:

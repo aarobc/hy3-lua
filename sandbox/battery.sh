@@ -1,15 +1,39 @@
 #!/bin/bash
-# hy3-lua behavioral battery against the nested Hyprland (lua:sway).
-# Requires /tmp/nested-sig. Clients are spawned via the instance's OWN
-# exec dispatch so they can never land on the host (see CLAUDE.md).
-SIG=$(cat /tmp/nested-sig)
-cd /tmp
+# hy3-lua behavioral battery (notes/sway-spec.md A/B/C cases) against the
+# DOCKER hyprland service (lua:sway layout).
+#
+# Runs INSIDE the hyprland service: `hyprctl` there is the image wrapper
+# that resolves the instance signature, and the sandbox (this script) is
+# mounted at /root/code/hy3-lua/sandbox. Launch from environment/:
+#
+#   docker compose exec -T hyprland bash /root/code/hy3-lua/sandbox/battery.sh
+#
+# Clients are spawned via the instance's OWN exec dispatch so they can
+# never land on the host.
 
-dump() { hyprctl -i "$SIG" repl 'return swaydbg.dump()'; }
-act()  { hyprctl -i "$SIG" repl 'local w=hl.get_active_window(); return w and w.stable_id or "none"'; }
-cmd()  { hyprctl -i "$SIG" dispatch "hl.dsp.layout(\"$1\")" >/dev/null 2>&1; sleep 0.4; }
-openw(){ hyprctl -i "$SIG" dispatch 'hl.dsp.exec_cmd("foot")' >/dev/null 2>&1; sleep 1.2; }
-closew(){ hyprctl -i "$SIG" dispatch 'hl.dsp.window.close()' >/dev/null 2>&1; sleep 1.0; }
+dump() { hyprctl repl 'return swaydbg.dump()'; }
+act()  { hyprctl repl 'local w=hl.get_active_window(); return w and w.stable_id or "none"'; }
+cmd()  { hyprctl dispatch "hl.dsp.layout(\"$1\")" >/dev/null 2>&1; sleep 0.4; }
+openw(){ hyprctl dispatch 'hl.dsp.exec_cmd("foot")' >/dev/null 2>&1; sleep 1.2; }
+closew(){ hyprctl dispatch 'hl.dsp.window.close()' >/dev/null 2>&1; sleep 1.0; }
+# close ALL current windows until the tree is actually empty (poll the
+# count: closes can take a beat to settle, so a fixed round-count would
+# dump a stale state)
+reset(){
+  local n i=0
+  while [ "$i" -lt 30 ]; do
+    n=$(hyprctl repl 'return #hl.get_windows()')
+    [ "$n" = "0" ] && break
+    [ -z "$n" ] && break
+    hyprctl dispatch 'hl.dsp.window.close()' >/dev/null 2>&1
+    i=$((i+1)); sleep 1.0
+  done
+  sleep 1.0
+  dump
+}
+
+echo "== reset to clean"
+reset
 
 echo "== build: A, B1 flat; splitv on B1; open B2  ->  [A] [con v [B1][B2]] (B2 focused)"
 openw; openw

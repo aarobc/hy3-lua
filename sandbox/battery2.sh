@@ -1,22 +1,30 @@
 #!/bin/bash
 # hy3-lua: promotion / re-orientation / collapse battery.
-SIG=$(cat /tmp/nested-sig)
+#
+# Runs INSIDE the hyprland service: `hyprctl` there is the image wrapper
+# that resolves the instance signature, and the sandbox (this script) is
+# mounted at /root/code/hy3-lua/sandbox. Launch from environment/:
+#
+#   docker compose exec -T hyprland bash /root/code/hy3-lua/sandbox/battery2.sh
 
-dump() { hyprctl -i "$SIG" repl 'return swaydbg.dump()'; }
-act()  { hyprctl -i "$SIG" repl 'local w=hl.get_active_window(); return w and w.stable_id or "none"'; }
-cmd()  { hyprctl -i "$SIG" dispatch "hl.dsp.layout(\"$1\")" >/dev/null 2>&1; sleep 0.4; }
-openw(){ hyprctl -i "$SIG" dispatch 'hl.dsp.exec_cmd("foot")' >/dev/null 2>&1; sleep 1.2; }
-closew(){ hyprctl -i "$SIG" dispatch 'hl.dsp.window.close()' >/dev/null 2>&1; sleep 1.0; }
-# close ALL current windows (by address list), for a clean start
+dump() { hyprctl repl 'return swaydbg.dump()'; }
+act()  { hyprctl repl 'local w=hl.get_active_window(); return w and w.stable_id or "none"'; }
+cmd()  { hyprctl dispatch "hl.dsp.layout(\"$1\")" >/dev/null 2>&1; sleep 0.4; }
+openw(){ hyprctl dispatch 'hl.dsp.exec_cmd("foot")' >/dev/null 2>&1; sleep 1.2; }
+closew(){ hyprctl dispatch 'hl.dsp.window.close()' >/dev/null 2>&1; sleep 1.0; }
+# close ALL current windows until the tree is actually empty (poll the
+# count: closes can take a beat to settle, so a fixed round-count would
+# dump a stale state)
 reset(){
-  local ids
-  ids=$(hyprctl -i "$SIG" -j clients | python3 -c "
-import json,sys
-print(' '.join(c['stableId'] for c in json.load(sys.stdin)))")
-  for id in $ids; do
-    hyprctl -i "$SIG" dispatch "hl.dsp.window.close()" >/dev/null 2>&1
+  local n i=0
+  while [ "$i" -lt 30 ]; do
+    n=$(hyprctl repl 'return #hl.get_windows()')
+    [ "$n" = "0" ] && break
+    [ -z "$n" ] && break
+    hyprctl dispatch 'hl.dsp.window.close()' >/dev/null 2>&1
+    i=$((i+1)); sleep 1.0
   done
-  sleep 1.2
+  sleep 1.0
   dump
 }
 

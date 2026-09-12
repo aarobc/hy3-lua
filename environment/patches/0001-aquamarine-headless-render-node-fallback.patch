@@ -1,0 +1,65 @@
+--- a/src/backend/Backend.cpp
++++ b/src/backend/Backend.cpp
+@@ -172,7 +172,27 @@
+             break;
+         }
+     }
+ 
++    if (!primaryAllocator) {
++        // hy3-lua: the headless backend reports no DRM fd, so in a
++        // container (no GPU, no DRM devices of its own) the allocator
++        // is never created and the backend refuses to start. Fall back
++        // to a passed-through render node (e.g. /dev/dri/renderD128);
++        // the Hyprland renderer does the same discovery on its side.
++        for (int minor = 0; minor < 32 && !primaryAllocator; ++minor) {
++            auto path = std::format("/dev/dri/renderD{}", 128 + minor);
++            auto fd   = open(path.c_str(), O_RDWR);
++            if (fd < 0)
++                continue;
++            auto rfd = reopenDRMNode(fd, true);
++            if (rfd < 0) {
++                close(fd);
++                continue;
++            }
++            primaryAllocator = CGBMAllocator::create(rfd, self);
++        }
++    }
++ 
+     if (!primaryAllocator && (implementations.empty() || implementations.at(0)->type() != AQ_BACKEND_NULL)) {
+         log(AQ_LOG_CRITICAL, "Cannot open backend: no allocator available");
+         return false;
+--- a/src/backend/Headless.cpp
++++ b/src/backend/Headless.cpp
+@@ -136,4 +136,21 @@
+ 
+ int Aquamarine::CHeadlessBackend::drmRenderNodeFD() {
+-    return -1;
++    // hy3-lua: the headless backend reports no DRM render node, but
++    // Hyprland's renderer still needs one for its GBM/EGL path. In a
++    // container there are no DRM devices of the backend's own; fall
++    // back to a passed-through render node (e.g. /dev/dri/renderD128)
++    // if present. Called once at compositor init; the fd stays open
++    // for the process lifetime (the renderer keeps using the node).
++    static int fd = -2;
++    if (fd == -2) {
++        fd = -1;
++        for (int minor = 0; minor < 32; ++minor) {
++            auto path = std::format("/dev/dri/renderD{}", 128 + minor);
++            if (int f = open(path.c_str(), O_RDWR); f >= 0) {
++                fd = f;
++                break;
++            }
++        }
++    }
++    return fd;
+ }
+--- a/src/backend/Headless.cpp
++++ b/src/backend/Headless.cpp
+@@ -199,4 +199,7 @@
+ 
+     output->modes.emplace_back(SP<SOutputMode>(new SOutputMode(Vector2D{1920, 1080}, 60000, true)));
++    // hy3-lua: also expose 1280x720 so `monitor HEADLESS-1 1280x720`
++    // (used by the hy3-lua test environment) has a mode to match
++    output->modes.emplace_back(SP<SOutputMode>(new SOutputMode(Vector2D{1280, 720}, 60000)));
+     output->swapchain = CSwapchain::create(backend->primaryAllocator, self.lock());
+     output->self      = output;
