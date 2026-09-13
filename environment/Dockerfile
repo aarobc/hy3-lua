@@ -64,7 +64,7 @@ CMD ["sway", "-c", "/config/sway-nested.config"]
 FROM base AS hyprland
 # 1) packages: Hyprland itself (pulls its whole dep chain, incl. the
 #    aquamarine 0.15.0 we replace below) + tooling to rebuild aquamarine
-RUN pacman -Sy --noconfirm --needed hyprland base-devel cmake patch
+RUN pacman -Sy --noconfirm --needed hyprland base-devel cmake patch hyprwayland-scanner
 # 2) source pull — its own cached step (same tarball arch packages: the
 #    PKGBUILD fetches exactly this tag; sha256 pinned from the PKGBUILD)
 RUN mkdir -p /src \
