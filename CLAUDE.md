@@ -29,12 +29,15 @@ approach in `~/dotfiles/hypr/fallback.lua`.
   only non-packaged piece; lets the mandatory headless backend build
   its GBM allocator from — and its renderer find — a passed-through
   render node; see the hyprland service notes below).
-- `layout.lua` — the `hl.layout.register("sway", {...})` implementation.
-  Complete: n-ary tree state, movement, splits, focus, closure (see
-  "Current status"). Loaded by the sandbox config; debug hooks in
-  `_G.swaydbg` (see below).
+- `src/sway.lua` — the `hl.layout.register("sway", {...})` implementation;
+  module name is `sway` (`require('sway')`), published as the `hy3-sway`
+  LuaRocks package (`hy3-sway-1.0.0-1.rockspec` at the repo root; the
+  root-level `layout.lua` is a thin compat shim so old
+  `require('layout')` configs keep working). Complete: n-ary tree state,
+  movement, splits, focus, closure (see "Current status"). Loaded by the
+  sandbox config; debug hooks in `_G.swaydbg` (see below).
 - `notes/sway-spec.md` — the empirical behavioral spec (sway 1.12) that
-  `layout.lua` implements. Every case verified against a real nested sway.
+  `src/sway.lua` implements. Every case verified against a real nested sway.
   **Read this before changing movement/insertion/split logic** — it is
   the source of truth, including the surprising bits (no auto-wrap on
   plain open, workspace re-orientation on orthogonal moves, 1-child
@@ -48,7 +51,7 @@ approach in `~/dotfiles/hypr/fallback.lua`.
   `sandbox/insert_battery.py`, `sandbox/tree_dump.py`; raw dumps in
   `notes/dualmove-dumps/`.
 - `sandbox/hypr-nested.lua` — minimal nested Hyprland config; loads
-  `layout.lua`, sets `layout = 'lua:sway'`, binds mod+hjkl to
+  `src/sway.lua` via `require('sway')`, sets `layout = 'lua:sway'`, binds mod+hjkl to
   `hl.dsp.layout('focus …')`, mod+shift+hjkl to `hl.dsp.layout('move …')`,
   mod+v/s/t to the split commands, mod+Return to `hl.dsp.exec_cmd('foot')`,
   mod+q to close.
@@ -131,7 +134,7 @@ open — then all fractions renormalize to sum 1 per parent level.
 - `S` (per-workspace state) is never pruned for destroyed workspaces;
   workspace ids appear monotonically increasing in practice.
 
-**Debug tooling** (in `layout.lua`, cheap enough to leave in):
+**Debug tooling** (in `src/sway.lua`, cheap enough to leave in):
 - `hyprctl -i <sig> repl 'return swaydbg.dump()'` — pretty tree with
   fracs and last-focus marks for every tracked workspace.
 - `swaydbg.state` — the raw state table.
@@ -258,7 +261,7 @@ Prefer `repl` over `eval` for anything that needs to read a value back.
 explicitly to be safe with statements.
 
 To call functions defined in your config file (e.g. something in
-`layout.lua`), export them onto `_G` from the config so `repl`/`eval` can
+`src/sway.lua`), export them onto `_G` from the config so `repl`/`eval` can
 reach them by name.
 
 ### Interpreting `hyprctl -j clients` / `-j workspaces` / `-j monitors`
@@ -379,7 +382,7 @@ nested-instance workflow (still fine to know); the rest apply to the
 Docker environment and the live session alike.
 
 - **Cross-monitor window moves use `hl.dsp.window.move({workspace=..., window=..., follow=...})`** — verified working (moves the window, `follow=true` keeps focus on it). The legacy route does NOT work in Lua-config builds: `hl.dsp.exec_raw('movetoworkspace 2')` returns `ok` and silently does nothing. `hl.dsp.window.move({direction=...})` is a *mouse drag* (legacy `movewindow`), not a window move — don't confuse them.
-- **No shared coordinate space across workspaces/monitors.** On nested scale-2 outputs: `ctx.area` for ws1 = (20,20,191,215) but `hl.get_monitors()` reports WAYLAND-2 as x=468 w=461 while ws2's actual `ctx.area` = (488,20,191,215). Absolute pixel math across workspaces is wrong (it silently picks the wrong "nearest" window). Use scale-free center ratios (`centerRatios` in `layout.lua`); use monitor geometry ONLY for adjacency/ordering tests.
+- **No shared coordinate space across workspaces/monitors.** On nested scale-2 outputs: `ctx.area` for ws1 = (20,20,191,215) but `hl.get_monitors()` reports WAYLAND-2 as x=468 w=461 while ws2's actual `ctx.area` = (488,20,191,215). Absolute pixel math across workspaces is wrong (it silently picks the wrong "nearest" window). Use scale-free center ratios (`centerRatios` in `src/sway.lua`); use monitor geometry ONLY for adjacency/ordering tests.
 - **`HL.Monitor` exposes `width`/`height`, not `w`/`h`** — `m.w` is `nil` and geometry comparisons silently never match.
 - **`hyprctl repl` return-value quirk:** a chunk whose last top-level statement is a `for` loop with an embedded `return` sometimes prints `ok` instead of the value; wrapping the logic in `local function f() ... end return f()` is reliable.
 - **`hyprctl instances` signature capture:** the line is `instance <sig>:` — `awk '{print $2}'` and `sed 's/^instance //; s/:$//'` both keep the colon (the `p` command prints before the second substitution runs). Use `sed -n 's/^instance \([^:]*\):$/\1/p'`.
@@ -533,7 +536,7 @@ This is the exact mechanic behind "persistent splits": the split direction
 is a property of the **container**, set once (`splitv`/`splith` or the
 toggle), and every window that subsequently lands in that container
 (open or moved-in) inherits it until the container is explicitly
-re-split. Whatever tree structure `layout.lua` ends up maintaining needs to
+re-split. Whatever tree structure `src/sway.lua` ends up maintaining needs to
 support this "wrap a leaf in a new container with an explicit, sticky
 orientation" operation directly — that's the sway behavior actually being
 emulated, not the workaround `fallback.lua` and its `armed`/`preselect`/
@@ -552,6 +555,6 @@ emulated, not the workaround `fallback.lua` and its `armed`/`preselect`/
    `swaydbg.dump()` from the Lua side) after each step; diff
    geometry/nesting. Save interesting dumps under `notes/` (dual-move
    raw dumps live in `notes/dualmove-dumps/`).
-4. `sandbox/hypr-nested.lua` already loads `layout.lua`; to compare
+4. `sandbox/hypr-nested.lua` already loads the layout; to compare
    against stock dwindle instead, flip `layout = 'lua:sway'` back to
    `'dwindle'` in that file and `docker compose restart hyprland`.
