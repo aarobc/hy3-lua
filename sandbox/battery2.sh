@@ -7,7 +7,7 @@
 #
 #   docker compose exec -T hyprland bash /root/code/hy3-lua/sandbox/battery2.sh
 
-dump() { hyprctl repl 'return swaydbg.dump()'; }
+dump() { hyprctl repl 'return hy3dbg.dump()'; }
 act()  { hyprctl repl 'local w=hl.get_active_window(); return w and w.stable_id or "none"'; }
 cmd()  { hyprctl dispatch "hl.dsp.layout(\"$1\")" >/dev/null 2>&1; sleep 0.4; }
 openw(){ hyprctl dispatch 'hl.dsp.exec_cmd("foot")' >/dev/null 2>&1; sleep 1.2; }

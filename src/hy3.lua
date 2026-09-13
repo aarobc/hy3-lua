@@ -1,7 +1,7 @@
--- hy3-lua: custom Hyprland layout emulating sway/i3 window movement and
--- persistent per-container splits. Module name: `sway` (published as the
--- `hy3-sway` LuaRocks package); requiring it self-registers the layout
--- as 'lua:sway'.
+-- hy3: custom Hyprland layout (HYprland + i3) emulating sway/i3 window
+-- movement and persistent per-container splits. Module name: `hy3`
+-- (published as the `hy3` LuaRocks package); requiring it
+-- self-registers the layout as 'lua:hy3'.
 --
 -- See CLAUDE.md for scope (tabbed/stacked explicitly OUT of scope) and
 -- notes/sway-spec.md for the empirical behavioral spec this implements
@@ -276,13 +276,13 @@ local function dbg(fmt, ...)
     end
 end
 
--- [ws id] = last ctx.area, for scale/coord debugging (shared with swaydbg)
+-- [ws id] = last ctx.area, for scale/coord debugging (shared with hy3dbg)
 local dbgareas = {}
 
 -- Drop the remembered trees of workspaces that have no live tiled
 -- windows (they keep their root layout; sway keeps empty-workspace
 -- orientation). Called from the empty-targets recalc and from
--- swaydbg.dump(): closing the LAST window on a workspace triggers no
+-- hy3dbg.dump(): closing the LAST window on a workspace triggers no
 -- recalc at all, so the dead tree would otherwise linger in S until
 -- the next window opens (invisible except through the debug dump).
 local function pruneEmptyWorkspaces()
@@ -642,11 +642,11 @@ local function doMove(ctx, dir)
     local wid, fid, targets = prep(ctx)
     local root = wid and S[wid] or nil
     if not root or not fid then
-        return 'sway: no focused window'
+        return 'hy3: no focused window'
     end
     local leaf = findLeaf(root, fid)
     if not leaf then
-        return 'sway: focused window not in tree'
+        return 'hy3: focused window not in tree'
     end
     local par = parOf(dir)
     local delta = deltaOf(dir)
@@ -723,11 +723,11 @@ local function doFocus(ctx, dir)
     local wid, fid, targets = prep(ctx)
     local root = wid and S[wid] or nil
     if not root or not fid then
-        return 'sway: no focused window'
+        return 'hy3: no focused window'
     end
     local leaf = findLeaf(root, fid)
     if not leaf then
-        return 'sway: focused window not in tree'
+        return 'hy3: focused window not in tree'
     end
     local par = parOf(dir)
     local delta = deltaOf(dir)
@@ -791,11 +791,11 @@ local function doSplit(ctx, arg)
     local wid, fid = prep(ctx)
     local root = wid and S[wid] or nil
     if not root or not fid then
-        return 'sway: no focused window'
+        return 'hy3: no focused window'
     end
     local leaf, P, idx = findLeaf(root, fid)
     if not leaf then
-        return 'sway: focused window not in tree'
+        return 'hy3: focused window not in tree'
     end
     if arg == 'togglesplit' then
         -- opposite of the focused window's PARENT layout (spec d.5)
@@ -827,7 +827,7 @@ end
 
 -- ------------------------------------------------------------------ msg
 
-hl.layout.register('sway', {
+hl.layout.register('hy3', {
     recalculate = recalculate,
 
     layout_msg = function(ctx, msg)
@@ -847,12 +847,12 @@ hl.layout.register('sway', {
         elseif cmd == 'togglesplit' then
             return doSplit(ctx, 'togglesplit')
         end
-        return 'sway: unknown command: ' .. tostring(msg)
+        return 'hy3: unknown command: ' .. tostring(msg)
     end,
 })
 
--- debug: `hyprctl -i <sig> repl 'return swaydbg.dump()'`
-_G.swaydbg = {
+-- debug: `hyprctl -i <sig> repl 'return hy3dbg.dump()'`
+_G.hy3dbg = {
     state = S,
     areas = dbgareas,
     dump = function()
@@ -889,4 +889,4 @@ _G.swaydbg = {
 
 -- Module return: the debug table (convenient from a repl). The layout is
 -- self-registered as a side effect of the require.
-return _G.swaydbg
+return _G.hy3dbg

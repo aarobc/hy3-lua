@@ -1,12 +1,12 @@
 -- Hyprland config for hy3-lua testing. Runs inside the docker test
 -- environment: docker compose up -d hyprland (see ../environment/).
 -- The repo is mounted at /root/code/hy3-lua, so the package.path below
--- resolves `require('sway')` to ../src/sway.lua.
+-- resolves `require('hy3')` to ../src/hy3.lua.
 -- See ../CLAUDE.md for the full workflow.
 
 package.path = package.path .. ';' .. os.getenv('HOME') .. '/code/hy3-lua/src/?.lua'
-require('sway')
-hl.config({ general = { layout = 'lua:sway' } })
+require('hy3')
+hl.config({ general = { layout = 'lua:hy3' } })
 
 local mod = 'SUPER'
 local function sc(...)

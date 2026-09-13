@@ -1,21 +1,21 @@
--- Compat shim: the layout module moved to src/sway.lua (module name 'sway',
--- published as the `hy3-sway` LuaRocks package). Old configs that still do
+-- Compat shim: the layout module lives in src/hy3.lua (module name 'hy3',
+-- published as the `hy3` LuaRocks package). Old configs that still do
 -- `require('layout')` keep working through this file. New configs should
--- `require('sway')` instead.
+-- `require('hy3')` instead.
 --
 -- Works both from a git checkout (adds the repo's src/ dir to package.path)
--- and from a luarocks install (where `sway` sits next to this module).
-local function tryRequireSway()
-    return pcall(require, 'sway')
+-- and from a luarocks install (where `hy3` sits next to this module).
+local function tryRequireHy3()
+    return pcall(require, 'hy3')
 end
 
-if not tryRequireSway() then
+if not tryRequireHy3() then
     local dir = debug.getinfo(1, 'S').source:match('^@(.*)/')
     if dir then
         package.path = package.path .. ';' .. dir .. 'src/?.lua'
     end
-    if not tryRequireSway() then
-        error("sway: layout module not found -- install the hy3-sway rock or add the repo's src/ dir to package.path")
+    if not tryRequireHy3() then
+        error("hy3: layout module not found -- install the hy3 rock or add the repo's src/ dir to package.path")
     end
 end
-return require('sway')
+return require('hy3')

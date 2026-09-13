@@ -1,8 +1,8 @@
 # hy3-lua
 
-`hy3-sway` is a custom [Hyprland](https://github.com/hyprwm/Hyprland)
+`hy3` (HYprland + i3) is a custom [Hyprland](https://github.com/hyprwm/Hyprland)
 layout (registered via `hl.layout.register`) that emulates the
-sway/i3 window-management behaviors Hyprland's built-in layouts (dwindle,
+i3/sway window-management behaviors Hyprland's built-in layouts (dwindle,
 bstack) don't provide:
 
 - **Directional window movement** (`move left/right/up/down`) that
@@ -34,8 +34,8 @@ From a local checkout or rock file:
 
 ```sh
 # from this repo
-luarocks pack hy3-sway-1.0.0-1.rockspec
-luarocks --lua-version 5.4 install hy3-sway-1.0.0-1.src.rock
+luarocks pack hy3-1.0.0-1.rockspec
+luarocks --lua-version 5.4 install hy3-1.0.0-1.src.rock
 ```
 
 > Note: `luarocks pack` with the committed rockspec clones the git
@@ -48,17 +48,17 @@ Or from a git checkout without installing (Hyprland's config can
 
 ```lua
 package.path = package.path .. ';/path/to/hy3-lua/src/?.lua'
-require("sway")
+require("hy3")
 ```
 
 ### Releasing to LuaRocks.org
 
 1. Bump `version` in the rockspec **and** rename the rockspec file
-   (`hy3-sway-<version>-<serial>.rockspec` — the filename must match the
+   (`hy3-<version>-<serial>.rockspec` — the filename must match the
    contents).
 2. `git tag v<version>`, uncomment the `tag = "v<version>"` line in the
    rockspec, commit and push.
-3. `luarocks commit hy3-sway-<version>-<serial>.rockspec` (requires an
+3. `luarocks commit hy3-<version>-<serial>.rockspec` (requires an
    account at https://luarocks.org).
 
 ## Usage
@@ -66,8 +66,8 @@ require("sway")
 In your `config.lua`:
 
 ```lua
-require("sway")                 -- registers the layout as 'lua:sway'
-hl.config({ general = { layout = "lua:sway" } })
+require("hy3")                 -- registers the layout as 'lua:hy3'
+hl.config({ general = { layout = "lua:hy3" } })
 
 local mod = "SUPER"
 hl.bind(mod .. "+h", hl.dsp.layout("focus left"))
@@ -99,11 +99,11 @@ hl.bind(mod .. "+t", hl.dsp.layout("togglesplit"))
 
 ## Debug
 
-The module exposes `_G.swaydbg`:
+The module exposes `_G.hy3dbg`:
 
 ```sh
-hyprctl repl 'return swaydbg.dump()'   # pretty tree dump (fracs, focus marks)
-hyprctl repl 'return swaydbg.state'    # raw state table
+hyprctl repl 'return hy3dbg.dump()'   # pretty tree dump (fracs, focus marks)
+hyprctl repl 'return hy3dbg.state'    # raw state table
 ```
 
 ## Development

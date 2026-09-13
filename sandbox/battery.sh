@@ -1,6 +1,6 @@
 #!/bin/bash
 # hy3-lua behavioral battery (notes/sway-spec.md A/B/C cases) against the
-# DOCKER hyprland service (lua:sway layout).
+# DOCKER hyprland service (lua:hy3 layout).
 #
 # Runs INSIDE the hyprland service: `hyprctl` there is the image wrapper
 # that resolves the instance signature, and the sandbox (this script) is
@@ -11,7 +11,7 @@
 # Clients are spawned via the instance's OWN exec dispatch so they can
 # never land on the host.
 
-dump() { hyprctl repl 'return swaydbg.dump()'; }
+dump() { hyprctl repl 'return hy3dbg.dump()'; }
 act()  { hyprctl repl 'local w=hl.get_active_window(); return w and w.stable_id or "none"'; }
 cmd()  { hyprctl dispatch "hl.dsp.layout(\"$1\")" >/dev/null 2>&1; sleep 0.4; }
 openw(){ hyprctl dispatch 'hl.dsp.exec_cmd("foot")' >/dev/null 2>&1; sleep 1.2; }

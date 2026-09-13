@@ -39,7 +39,7 @@ kill_title() { # $1 = title
 dump() { # $1 = label
   echo "=== $1"
   echo "active: $(active)"
-  H repl 'return swaydbg.dump()'
+  H repl 'return hy3dbg.dump()'
   H -j clients 2>/dev/null | python3 -c "
 import json,sys
 for c in json.load(sys.stdin):
