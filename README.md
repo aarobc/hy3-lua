@@ -30,7 +30,13 @@ Tabbed and stacked layouts are deliberately out of scope.
 
 ## Installation
 
-From a local checkout or rock file:
+From LuaRocks.org:
+
+```sh
+luarocks install hy3
+```
+
+Or from a local checkout / rock file:
 
 ```sh
 # from this repo
@@ -53,13 +59,25 @@ require("hy3")
 
 ### Releasing to LuaRocks.org
 
+One-time: create an account at https://luarocks.org and grab your API
+key from your profile page (stored locally after first use).
+
 1. Bump `version` in the rockspec **and** rename the rockspec file
    (`hy3-<version>-<serial>.rockspec` — the filename must match the
    contents).
-2. `git tag v<version>`, uncomment the `tag = "v<version>"` line in the
-   rockspec, commit and push.
-3. `luarocks commit hy3-<version>-<serial>.rockspec` (requires an
-   account at https://luarocks.org).
+2. Uncomment the `tag = "v<version>"` line in the rockspec, commit,
+   then `git tag v<version>` and push both (order matters: the tag
+   must point at the commit containing the uncommented rockspec).
+3. Upload (this fetches and builds from the pushed tag, exactly like
+   a user's install):
+
+   ```sh
+   luarocks upload --api-key <key> hy3-<version>-<serial>.rockspec
+   # subsequent releases: just `luarocks upload <rockspec>`
+   ```
+
+Users can also install without the server at any point:
+`luarocks install aarobc/hy3-lua`.
 
 ## Usage
 
