@@ -4,7 +4,7 @@ version = "1.0.0-1"
 
 source = {
    url = "git://github.com/aarobc/hy3-lua.git",
-   -- tag = "v1.0.0",
+   tag = "v1.0.0",
 }
 
 description = {
