@@ -450,47 +450,28 @@ local function focusedRootIndex(root)
     return #root.children
 end
 
--- Center of `leaf` as a (0..1) ratio of the root box, from cumulative
--- main-axis fractions. Scale-free: workspaces' ctx.area spaces do NOT
--- share a coordinate scale with each other (or with hl.get_monitors()
--- geometry) -- verified on nested scale-2 outputs -- so cross-monitor
--- "nearest window" picks must compare ratios, not absolute pixels (F.1).
-local function centerRatios(root, leaf)
-    local function rec(children, orient, x0, y0, x1, y1)
-        local x, y = x0, y0
-        for _, c in ipairs(children) do
-            local bw, bh
-            if orient == 'h' then
-                bw, bh = (x1 - x0) * c.frac, (y1 - y0)
-            else
-                bw, bh = (x1 - x0), (y1 - y0) * c.frac
-            end
-            local cx0, cy0 = x, y
-            local cx1, cy1 = x + bw, y + bh
-            if c == leaf then
-                return (cx0 + cx1) / 2, (cy0 + cy1) / 2
-            end
-            if c.kind == 'con' then
-                local r, t = rec(c.children, c.orient, cx0, cy0, cx1, cy1)
-                if r then
-                    return r, t
-                end
-            end
-            if orient == 'h' then
-                x = x + bw
-            else
-                y = y + bh
-            end
+-- Absolute screen-space center of a window, from its rendered `at`/`size`
+-- (nil if the window is not currently mapped). Window geometry IS in a
+-- shared absolute screen coordinate space across monitors -- verified on a
+-- 2-output setup: a window on the right output reports x > the left
+-- output's width -- so cross-monitor "nearest window" is a plain Euclidean
+-- comparison on these centers. (This is different from ctx.area, whose
+-- per-workspace spaces do NOT share a scale; that was the reason for the
+-- old ratio-only pick, which is what made the far-side window on the
+-- adjacent monitor look "nearer" than the boundary-adjacent one.)
+local function winCenter(stableId)
+    for _, w in ipairs(hl.get_windows()) do
+        if w.stable_id == stableId and w.at and w.size then
+            return w.at.x + w.size.x / 2, w.at.y + w.size.y / 2
         end
-        return nil
     end
-    return rec(root.children, root.layout, 0, 0, 1, 1)
+    return nil
 end
 
 -- The monitor in `dir`'s direction sharing an edge with `m` (nil at the
 -- screen edge). Overlap test on the other axis, adjacency on this one.
 -- Monitor geometry is used ONLY for this adjacency/ordering test, never
--- for layout math (see centerRatios).
+-- for layout math (see winCenter).
 local function findAdjacentMonitor(m, dir)
     local cands = {}
     for _, mo in ipairs(hl.get_monitors()) do
@@ -605,18 +586,24 @@ local function doFocusCross(ctx, wid, leaf, dir, targets)
     if not troot or #troot.children == 0 then
         return true -- F.2: empty target focuses the workspace node
     end
-    -- geometrically nearest window, compared in scale-free center ratios
-    -- (see centerRatios: no absolute coordinate space is shared between
-    -- the two workspaces).
-    local sx, sy = centerRatios(S[wid], leaf)
+    -- geometrically nearest window, compared in ABSOLUTE screen space
+    -- (see winCenter). The source window sits at the workspace edge, so its
+    -- closest candidate across the boundary is the boundary-adjacent one --
+    -- a ratio-only comparison used to pick the far-side window instead.
+    local sx, sy = winCenter(leaf.id)
+    if not sx then
+        return true
+    end
     local bestd, bestid
     local function pick(children)
         for _, c in ipairs(children) do
             if c.kind == 'win' then
-                local cx, cy = centerRatios(troot, c)
-                local d = (cx - sx) ^ 2 + (cy - sy) ^ 2
-                if not bestd or d < bestd then
-                    bestd, bestid = d, c.id
+                local cx, cy = winCenter(c.id)
+                if cx then
+                    local d = (cx - sx) ^ 2 + (cy - sy) ^ 2
+                    if not bestd or d < bestd then
+                        bestd, bestid = d, c.id
+                    end
                 end
             else
                 pick(c.children)
@@ -851,10 +838,37 @@ hl.layout.register('hy3', {
     end,
 })
 
+-- Keep each container's remembered last-focus in step with the REAL focused
+-- window, including focus changes that never go through layout_msg (click-
+-- driven focus, focusing by workspace/monitor/title, cross-monitor focus
+-- cross). Recalcs only fire on topology changes -- and a map-time recalc
+-- reports the PRE-map window as active -- so neither of them tracks a bare
+-- focus change. Without this, focusedChild() descends into a stale
+-- last-focus child and a perpendicular `move` lands the mover adjacent to
+-- the wrong window (frequently the first/top one), which is the
+-- "always moves to the top" divergence from sway. sway descends into the
+-- container's *currently-focused* child; this is what makes that match.
+--
+-- Guarded by findLeaf: if the event fires before a window has been inserted
+-- into the tree (e.g. right after a map, before the recalc) or while a move
+-- is mid-flight, the handler is a no-op rather than clobbering state.
+local function onWindowActive()
+    local w = hl.get_active_window and hl.get_active_window() or nil
+    if not w or not w.workspace then
+        return
+    end
+    local root = S[w.workspace.id]
+    if root and findLeaf(root, w.stable_id) then
+        setLastFocusPath(root, w.stable_id)
+    end
+end
+local windowActiveSub = hl.on('window.active', onWindowActive)
+
 -- debug: `hyprctl -i <sig> repl 'return hy3dbg.dump()'`
 _G.hy3dbg = {
     state = S,
     areas = dbgareas,
+    windowActiveSub = windowActiveSub,
     dump = function()
         pruneEmptyWorkspaces()
         local out = {}

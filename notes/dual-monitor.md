@@ -239,9 +239,14 @@ Hyprland layout, not just sway:
 - **X.1** — leftward cross appends at the END of a parallel target root.
 - **X.4** — perpendicular target root → focused root child's index.
 - **F.1** — focus cross to the nearest window; implemented as a
-  scale-free **center-ratio** distance (`centerRatios`), which matched
-  the expected pick (middle of a 3-way vertical stack) where absolute
-  pixel math picked the wrong window (see gotcha below).
+  **Euclidean distance on absolute rendered window centers**
+  (`winCenter` in `src/hy3.lua`). (Correction: an earlier version used a
+  scale-free center-ratio distance because of a belief that absolute pixel
+  math across workspaces was wrong — that belief applied to `ctx.area`, not
+  to rendered window geometry. Window `at`/`size` *are* in a shared absolute
+  screen space across monitors, so the ratio pick was actually the bug: it
+  matched an edge window on the source monitor to the *far-side* window on
+  the target monitor. Absolute centers pick the boundary-adjacent window.)
 - **F.2 / F.3** — empty target / screen edge → no-op.
 
 Mechanics and gotchas found during implementation:
@@ -253,11 +258,14 @@ Mechanics and gotchas found during implementation:
   must be migrated BEFORE the dispatcher call, otherwise the target
   workspace's post-move recalc re-inserts the window at the focus
   anchor instead of the planned slot.
-- **There is no shared absolute coordinate space** between workspaces
+- **`ctx.area` is not a shared coordinate space** between workspaces
   (or with `hl.get_monitors()`): on nested scale-2 outputs, ws1's
   `ctx.area` = (20,20,191,215) while WAYLAND-2 reports x=468 w=461 and
-  ws2's `ctx.area` = (488,20,191,215). Cross-monitor geometry must be
-  done in ratios; monitor geometry is only safe for adjacency/ordering.
+  ws2's `ctx.area` = (488,20,191,215). So **layout math** (fraction → box)
+  must stay scale-free per workspace. But a window's **rendered**
+  `at`/`size` ARE shared absolute screen coords across monitors, so
+  cross-monitor "nearest window" uses absolute window centers, and monitor
+  geometry is only for adjacency/ordering.
 - **Crossing beats wrapping** for `focus <dir>` (sway tries the
   adjacent output before `focus_wrapping`). The layout wraps only at
   the true screen edge; single-monitor wrap behavior is unchanged.
@@ -267,7 +275,7 @@ Mechanics and gotchas found during implementation:
 Open questions that REMAIN open for the Hyprland side (same list as
 §2.5, plus):
 6. Focus-cross "nearest" in complex (deeply nested) target trees —
-   center-ratio vs sway's exact `con_closest_in_direction`.
+   absolute window-center distance vs sway's exact `con_closest_in_direction`.
 7. Cross into a target root with **unequal** sibling percents — the
    battery only exercises equal pre-cross splits (Q1).
 

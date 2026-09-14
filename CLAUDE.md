@@ -103,7 +103,8 @@ against real sway 1.12; case numbers refer to `notes/sway-spec.md`):
   edge (right/down: index 0, left/up: end, M.1/X.1/M.1b) or at the
   focused root child's index when the target root is perpendicular
   (X.4); screen edge → no-op (M.2). `focus` past the edge crosses to
-  the geometrically nearest window (F.1, center-ratio distance),
+  the geometrically nearest window (F.1, absolute screen-space distance —
+  see the "No shared coordinate space" gotcha),
   empty target → no-op (F.2), screen edge → no-op (F.3). Crossing
   BEATS wrap: wrap at the deepest parallel level is only the screen-
   edge fallback (verified against sway F.1; single-monitor wrap
@@ -121,15 +122,24 @@ open — then all fractions renormalize to sum 1 per parent level.
   the direction re-orients first (B.14) and does NOT cross in the same
   tick; a *subsequent* edge move then crosses (sway-side behavior for
   the promote-then-cross combination unverified — dual-monitor.md Q5).
-- Focus-cross "nearest window" is a center-ratio distance, not sway's
-  exact corner-based `con_closest_in_direction` (simple cases match,
-  complex trees unverified — Q3).
+- Focus-cross "nearest window" is a plain Euclidean distance on **absolute
+  rendered window centers** (`winCenter` in `src/hy3.lua`), not sway's
+  exact corner-based `con_closest_in_direction`. That fixed the old
+  center-ratio pick, which compared per-workspace normalized ratios and
+  therefore matched the *far-side* window on the adjacent monitor to an
+  edge window instead of the boundary-adjacent one (e.g. right-edge of
+  mon A crossed to the right-edge of mon B). Simple/adjacent cases match
+  sway; complex corner cases unverified — Q3.
 - Vertical monitor adjacency (`position 0,720`) is implemented by the
   same geometry code but has not been battery-tested (Q4).
-- Per-container `last_focus` is synced by recalcs plus our own
-  focus/move/insert bookkeeping, but does NOT follow click-driven focus
-  changes: a click into a non-last-focused branch, then a `move` into
-  that container, descends into the remembered child instead.
+- Per-container `last_focus` is kept in step with the *real* focused window
+  by a `hl.on('window.active', …)` subscription **as well as** recalcs and our
+  own focus/move/insert bookkeeping. This closes the old click-focus gap: a
+  click into a non-last-focused branch now re-syncs the remembered child, so
+  a subsequent `move` into that container descends into the window that is
+  actually focused (matching sway) instead of a stale child. The handler is
+  guarded by `findLeaf` so it is a no-op before a window is inserted or while
+  a move is mid-flight.
 - No gap modeling: placement divides the raw `ctx.area`; topology and
   relative sizes match a gapped sway, absolute geometry does not.
 - `S` (per-workspace state) is never pruned for destroyed workspaces;
@@ -383,7 +393,7 @@ nested-instance workflow (still fine to know); the rest apply to the
 Docker environment and the live session alike.
 
 - **Cross-monitor window moves use `hl.dsp.window.move({workspace=..., window=..., follow=...})`** — verified working (moves the window, `follow=true` keeps focus on it). The legacy route does NOT work in Lua-config builds: `hl.dsp.exec_raw('movetoworkspace 2')` returns `ok` and silently does nothing. `hl.dsp.window.move({direction=...})` is a *mouse drag* (legacy `movewindow`), not a window move — don't confuse them.
-- **No shared coordinate space across workspaces/monitors.** On nested scale-2 outputs: `ctx.area` for ws1 = (20,20,191,215) but `hl.get_monitors()` reports WAYLAND-2 as x=468 w=461 while ws2's actual `ctx.area` = (488,20,191,215). Absolute pixel math across workspaces is wrong (it silently picks the wrong "nearest" window). Use scale-free center ratios (`centerRatios` in `src/hy3.lua`); use monitor geometry ONLY for adjacency/ordering tests.
+- **Two different coordinate spaces — know which one you're in.** `ctx.area` (the per-workspace usable box) does NOT share a scale across workspaces/monitors: on nested scale-2 outputs, `ctx.area` for ws1 = (20,20,191,215) but ws2's actual `ctx.area` = (488,20,191,215) while `hl.get_monitors()` reports the second output at x=468. So **layout math** (fractions → boxes) must stay scale-free per workspace. BUT a window's rendered `w.at`/`w.size` **are** in a shared absolute screen coordinate space across monitors (verified: a window on the right output reports x > the left output's width). So for **cross-monitor "nearest window"** picks, compare absolute window centers (`winCenter` in `src/hy3.lua`: `w.at + w.size/2`) directly — a ratio-only comparison is what made the far-side window on the adjacent monitor look "nearer". Monitor geometry from `hl.get_monitors()` is used only for adjacency/ordering tests.
 - **`HL.Monitor` exposes `width`/`height`, not `w`/`h`** — `m.w` is `nil` and geometry comparisons silently never match.
 - **`hyprctl repl` return-value quirk:** a chunk whose last top-level statement is a `for` loop with an embedded `return` sometimes prints `ok` instead of the value; wrapping the logic in `local function f() ... end return f()` is reliable.
 - **`hyprctl instances` signature capture:** the line is `instance <sig>:` — `awk '{print $2}'` and `sed 's/^instance //; s/:$//'` both keep the colon (the `p` command prints before the second substitution runs). Use `sed -n 's/^instance \([^:]*\):$/\1/p'`.
