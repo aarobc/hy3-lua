@@ -21,7 +21,8 @@ approach in `~/dotfiles/hypr/fallback.lua`.
 
 ## Directory layout
 
-- `CLAUDE.md` — this file.
+- `AGENTS.md` — this file.
+- `tests/` — automated programmatic test suite (`tests/test_suite.py`) testing 31 behavioral test cases across both Sway and Hyprland drivers (`driver_base.py`, `sway_driver.py`, `hyprland_driver.py`) without keybinding emulation.
 - `environment/` — Docker test environment (see "Docker test
   environment" below): `Dockerfile` (base + sway + hyprland stages),
   `compose.yml` (one service per WM), `entrypoint.sh`,
@@ -91,11 +92,15 @@ against real sway 1.12; case numbers refer to `notes/sway-spec.md`):
 - Focus: climb-up beats wrapping; wrap at the deepest parallel level;
   descent into the container's remembered focused child.
 - Closure (C): proportional fraction renormalize; 1-child containers
-  persist (child → frac 1.0); 0-child containers reaped (C.17–C.19).
-  Note: closing the LAST window on a workspace triggers no recalc at
-  all, so the dead tree lingers in `S` until the next event; it is
-  reaped by `pruneEmptyWorkspaces()` (called from the empty-targets
-  recalc and from `hy3dbg.dump()`, which otherwise shows a stale tree).
+  persist (child → frac 1.0); 0-child containers reaped immediately in `removeNode` (C.17–C.19).
+  Empty containers are recursively pruned when their last child moves or closes.
+  Closing the LAST window on a workspace is reaped by `pruneEmptyWorkspaces()`.
+- Clean insertion: cursor-based drop targeting and spontaneous mouse-velocity
+  resizing have been removed. Window insertion strictly follows the focused anchor
+  (or workspace last-focus), inserting immediately after the focused sibling in its
+  innermost container.
+- Keyboard resize: `resize grow|shrink <width|height|left|right|up|down> [amount]`
+  proportionally adjusts container fractions across siblings (F.1–F.2).
 - Cross-monitor (dual-monitor.md §2, battery `sandbox/cross_battery.sh`,
   all cases pass on a 2-output nested instance): `move` past the
   workspace edge hands the window to the *adjacent monitor's active

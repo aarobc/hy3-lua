@@ -143,6 +143,7 @@ layout registrations.
 | `splitv`        | persistent vertical split at the focused container          |
 | `splith`        | persistent horizontal split                                 |
 | `togglesplit`   | toggle the focused container's orientation                  |
+| `resize <grow\|shrink> <dir> [amount]` | resize container along `<dir>` (`width`, `height`, `left`, `right`, `up`, `down`) by `[amount]` (e.g. `10 ppt`, `50px`) |
 
 (`<dir>` is `left`, `right`, `up`, or `down`.)
 
@@ -158,18 +159,33 @@ hyprctl repl 'return hy3dbg.state'    # raw state table
 Start Hyprland with `HY3_DEBUG_LOG=/tmp/hy3.log` for a per-recalculation
 log (targets, active window, tree changes).
 
-## Development
+## Development & Testing
 
-See [CLAUDE.md](CLAUDE.md) — it documents the docker test environment
-(`environment/`), the battery scripts under `sandbox/`, and the
-`hl.*` API gotchas. Quick start:
+See [AGENTS.md](AGENTS.md) — it documents the docker test environment
+(`environment/`), programmatic testing architecture, and the
+`hl.*` API gotchas.
+
+### Automated Test Suite
+
+An exhaustive programmatic test suite (`tests/test_suite.py`) runs identical behavioral
+tests across both Sway (reference implementation) and Hyprland without requiring
+keybinding emulation:
 
 ```sh
-cd environment
-docker compose build
-docker compose up -d sway hyprland
-# then, e.g.:
-docker compose exec -T hyprland bash /root/code/hy3-lua/sandbox/battery.sh
+# Run tests against both Sway and Hyprland
+PYTHONPATH=. python3 tests/test_suite.py --target=both
+
+# Or against individual targets
+PYTHONPATH=. python3 tests/test_suite.py --target=hyprland
+PYTHONPATH=. python3 tests/test_suite.py --target=sway
+```
+
+### Dual-Monitor Battery
+
+Cross-monitor hand-off can be tested with:
+
+```sh
+docker compose -f environment/compose.yml exec -T hyprland bash /root/code/hy3-lua/sandbox/cross_battery.sh
 ```
 
 ## License

@@ -99,9 +99,15 @@ end
 
 local function removeNode(root, node)
     local P = findParent(root, node)
+    if not P then
+        return
+    end
     local i = indexOf(P.children, node)
     if i then
         table.remove(P.children, i)
+        if P ~= root and #P.children == 0 then
+            removeNode(root, P)
+        end
     end
 end
 
@@ -234,45 +240,6 @@ end
 
 -- ---------------------------------------------------------------- resize
 
-local dragState = nil
-local inLayoutMsg = false
-local dragTimerActive = false
-local wasTiled = {}
-
-local function resetDrag()
-    dragState = nil
-end
-
-local function computeBox(root, targetNode, area)
-    if targetNode == root then
-        return { x = area.x, y = area.y, w = area.w, h = area.h }
-    end
-    local function find(node, currentBox)
-        if node == targetNode then
-            return currentBox
-        end
-        if node.kind == 'con' or node == root then
-            local x, y = currentBox.x, currentBox.y
-            local orient = orientOf(node)
-            for _, c in ipairs(node.children or {}) do
-                local bw = (orient == 'h') and (currentBox.w * c.frac) or currentBox.w
-                local bh = (orient == 'v') and (currentBox.h * c.frac) or currentBox.h
-                local b = { x = x, y = y, w = bw, h = bh }
-                local r = find(c, b)
-                if r then
-                    return r
-                end
-                if orient == 'h' then
-                    x = x + bw
-                else
-                    y = y + bh
-                end
-            end
-        end
-    end
-    return find(root, area) or area
-end
-
 -- Find ancestor con of `con` whose parent layout matches `dir`'s parallel
 -- orientation and has a resizing sibling in direction `dir` (sway
 -- container_find_resize_parent + container_get_resize_sibling).
@@ -296,111 +263,6 @@ local function findResizeTarget(root, con, dir)
         C = P
     end
     return nil
-end
-
-local function handleMouseResize(ctx, root, wid, activeId, targets)
-    if not hl.get_cursor_pos then
-        return
-    end
-    local cur = hl.get_cursor_pos()
-    if not cur or not cur.x or not cur.y then
-        return
-    end
-
-    local leaf = findLeaf(root, activeId)
-    if not leaf then
-        return
-    end
-
-    local now = os.clock()
-    if dragState and dragState.wid == wid and dragState.winId == activeId and (now - dragState.lastTime) < 0.35 then
-        local dx = cur.x - dragState.lastX
-        local dy = cur.y - dragState.lastY
-        dragState.lastX = cur.x
-        dragState.lastY = cur.y
-        dragState.lastTime = now
-
-        if math.abs(dx) >= 0.5 and dragState.hCon and dragState.hSib then
-            local P = dragState.hP
-            local P_w = (P._box and P._box.w) or ctx.area.w
-            if P_w > 0 then
-                local delta = (dragState.edgeX == 'right') and dx or -dx
-                local dfrac = delta / P_w
-                local minFrac = math.max(0.02, math.min(0.2, 40 / math.max(1, P_w)))
-                if dfrac > 0 then
-                    dfrac = math.min(dfrac, math.max(0, dragState.hSib.frac - minFrac))
-                elseif dfrac < 0 then
-                    dfrac = math.max(dfrac, -math.max(0, dragState.hCon.frac - minFrac))
-                end
-                dragState.hCon.frac = dragState.hCon.frac + dfrac
-                dragState.hSib.frac = dragState.hSib.frac - dfrac
-            end
-        end
-
-        if math.abs(dy) >= 0.5 and dragState.vCon and dragState.vSib then
-            local P = dragState.vP
-            local P_h = (P._box and P._box.h) or ctx.area.h
-            if P_h > 0 then
-                local delta = (dragState.edgeY == 'down') and dy or -dy
-                local dfrac = delta / P_h
-                local minFrac = math.max(0.02, math.min(0.2, 40 / math.max(1, P_h)))
-                if dfrac > 0 then
-                    dfrac = math.min(dfrac, math.max(0, dragState.vSib.frac - minFrac))
-                elseif dfrac < 0 then
-                    dfrac = math.max(dfrac, -math.max(0, dragState.vCon.frac - minFrac))
-                end
-                dragState.vCon.frac = dragState.vCon.frac + dfrac
-                dragState.vSib.frac = dragState.vSib.frac - dfrac
-            end
-        end
-    else
-        local winBox = leaf._box
-        if not winBox and targets[activeId] then
-            local t = targets[activeId]
-            if t.window and t.window.at and t.window.size then
-                winBox = { x = t.window.at.x, y = t.window.at.y, w = t.window.size.x, h = t.window.size.y }
-            elseif t.box then
-                winBox = t.box
-            end
-        end
-        if not winBox then
-            winBox = computeBox(root, leaf, ctx.area)
-        end
-
-        if winBox and winBox.w > 0 and winBox.h > 0 then
-            local edgeX = (cur.x > winBox.x + winBox.w / 2) and 'right' or 'left'
-            local edgeY = (cur.y > winBox.y + winBox.h / 2) and 'down' or 'up'
-
-            local hCon, hP, _, hSib = findResizeTarget(root, leaf, edgeX)
-            local vCon, vP, _, vSib = findResizeTarget(root, leaf, edgeY)
-
-            dragState = {
-                wid = wid,
-                winId = activeId,
-                lastX = cur.x,
-                lastY = cur.y,
-                lastTime = now,
-                edgeX = edgeX,
-                edgeY = edgeY,
-                hCon = hCon,
-                hSib = hSib,
-                hP = hP,
-                vCon = vCon,
-                vSib = vSib,
-                vP = vP,
-            }
-        end
-    end
-
-    if hl.timer and not dragTimerActive then
-        dragTimerActive = true
-        hl.timer(function()
-            dragTimerActive = false
-            if dragState and (os.clock() - dragState.lastTime) >= 0.25 then
-                dragState = nil
-            end
-        end, { timeout = 250, type = 'oneshot' })
-    end
 end
 
 -- ----------------------------------------------------------------- place
@@ -472,136 +334,6 @@ local function pruneEmptyWorkspaces()
     end
 end
 
-local function getBox(root, node, area)
-    return node._box or computeBox(root, node, area)
-end
-
-local function findDropTarget(root, cur, area)
-    if not cur or not cur.x or not cur.y then
-        return nil
-    end
-
-    local bestLeaf = nil
-    local bestDist = math.huge
-
-    local function scan(node)
-        if node.kind == 'win' then
-            local b = getBox(root, node, area)
-            if b and b.w > 0 and b.h > 0 then
-                if cur.x >= b.x and cur.x <= (b.x + b.w) and cur.y >= b.y and cur.y <= (b.y + b.h) then
-                    bestLeaf = node
-                    bestDist = 0
-                    return true
-                end
-                local cx = b.x + b.w / 2
-                local cy = b.y + b.h / 2
-                local dist = (cur.x - cx) ^ 2 + (cur.y - cy) ^ 2
-                if dist < bestDist then
-                    bestDist = dist
-                    bestLeaf = node
-                end
-            end
-        elseif node.kind == 'con' or node == root then
-            for _, c in ipairs(node.children or {}) do
-                if scan(c) then
-                    return true
-                end
-            end
-        end
-        return false
-    end
-
-    scan(root)
-    return bestLeaf
-end
-
-local function insertAtDropTarget(root, id, cur, area)
-    if #root.children == 0 then
-        table.insert(root.children, { kind = 'win', id = id, frac = 1.0 })
-        return
-    end
-
-    local targetLeaf = findDropTarget(root, cur, area)
-    if not targetLeaf then
-        table.insert(root.children, { kind = 'win', id = id, frac = 0 })
-        return
-    end
-
-    local _, P, idx = findLeaf(root, targetLeaf.id)
-    if not P or not idx then
-        P, idx = root, #root.children
-    end
-
-    local b = getBox(root, targetLeaf, area)
-    local distLeft = math.abs(cur.x - b.x)
-    local distRight = math.abs((b.x + b.w) - cur.x)
-    local distTop = math.abs(cur.y - b.y)
-    local distBottom = math.abs((b.y + b.h) - cur.y)
-
-    local minDist = math.min(distLeft, distRight, distTop, distBottom)
-    local edge = 'right'
-    if minDist == distLeft then
-        edge = 'left'
-    elseif minDist == distRight then
-        edge = 'right'
-    elseif minDist == distTop then
-        edge = 'up'
-    else
-        edge = 'down'
-    end
-
-    local pOrient = orientOf(P)
-    local newLeaf = { kind = 'win', id = id, frac = 0 }
-
-    if pOrient == 'h' then
-        if edge == 'left' then
-            table.insert(P.children, idx, newLeaf)
-        elseif edge == 'right' then
-            table.insert(P.children, idx + 1, newLeaf)
-        else
-            -- Perpendicular: split vertically
-            if P == root and #root.children == 1 then
-                root.layout = 'v'
-                table.insert(root.children, (edge == 'up') and 1 or 2, newLeaf)
-            else
-                local oldFrac = targetLeaf.frac
-                targetLeaf.frac = 1.0
-                local wrapper = {
-                    kind = 'con',
-                    orient = 'v',
-                    frac = oldFrac,
-                    last_focus = id,
-                    children = (edge == 'up') and { newLeaf, targetLeaf } or { targetLeaf, newLeaf },
-                }
-                P.children[idx] = wrapper
-            end
-        end
-    else -- pOrient == 'v'
-        if edge == 'up' then
-            table.insert(P.children, idx, newLeaf)
-        elseif edge == 'down' then
-            table.insert(P.children, idx + 1, newLeaf)
-        else
-            -- Perpendicular: split horizontally
-            if P == root and #root.children == 1 then
-                root.layout = 'h'
-                table.insert(root.children, (edge == 'left') and 1 or 2, newLeaf)
-            else
-                local oldFrac = targetLeaf.frac
-                targetLeaf.frac = 1.0
-                local wrapper = {
-                    kind = 'con',
-                    orient = 'h',
-                    frac = oldFrac,
-                    last_focus = id,
-                    children = (edge == 'left') and { newLeaf, targetLeaf } or { targetLeaf, newLeaf },
-                }
-                P.children[idx] = wrapper
-            end
-        end
-    end
-end
-
 local function recalculate(ctx)
     local n = #ctx.targets
     if n == 0 then
@@ -629,10 +361,9 @@ local function recalculate(ctx)
         idlist[#idlist + 1] = tostring(id)
     end
     table.sort(idlist)
-    dbg('recalc n=%d ids=[%s] active=%s prevActive=%s', n, table.concat(idlist, ','), tostring(activeId), tostring(prevActive))
+    dbg('recalc n=%d ids=[%s] active=%s', n, table.concat(idlist, ','), tostring(activeId))
 
     -- 1. close: drop dead leaves; reap empty containers (C.17-C.19)
-    local deadPruned = false
     local function pruneDead(children)
         local m = #children
         for i = m, 1, -1 do
@@ -640,21 +371,11 @@ local function recalculate(ctx)
             if c.kind == 'win' then
                 if not live[c.id] then
                     table.remove(children, i)
-                    deadPruned = true
-                    if hl.get_windows then
-                        for _, w in ipairs(hl.get_windows()) do
-                            if tostring(w.stable_id) == tostring(c.id) and w.floating then
-                                wasTiled[c.id] = true
-                                break
-                            end
-                        end
-                    end
                 end
             else
                 pruneDead(c.children)
                 if #c.children == 0 then
                     table.remove(children, i)
-                    deadPruned = true
                 end
             end
         end
@@ -666,29 +387,29 @@ local function recalculate(ctx)
     --    innermost container (spec A.2 / rule a.2); never auto-wrapped.
     --    A map-time recalc reports the PRE-MAP focused window as active
     --    (focus settles on the new window after it), so activeId is exactly
-    --    sway's insertion anchor; if it is itself new/missing or from drag-drop,
-    --    insert at drop target based on cursor position.
+    --    sway's insertion anchor; if activeId is new/missing, fallback to
+    --    root.last_focus, or append to root.
     local insertedNew = false
-    local cur = hl.get_cursor_pos and hl.get_cursor_pos() or nil
     for id in pairs(targets) do
         if not findLeaf(root, id) then
-            local isDragDrop = wasTiled[id] or (activeId == id) or (not findLeaf(root, activeId))
-            if isDragDrop and cur and cur.x and cur.y and #root.children > 0 then
-                insertAtDropTarget(root, id, cur, ctx.area)
-                wasTiled[id] = nil
-            else
-                local parent, idx
-                if activeId then
-                    local _, p, i = findLeaf(root, activeId)
-                    if p then
-                        parent, idx = p, i + 1
-                    end
-                end
-                if not parent then
-                    parent, idx = root, #root.children + 1
-                end
-                table.insert(parent.children, idx, { kind = 'win', id = id, frac = 0 })
+            local anchorId = nil
+            if activeId and findLeaf(root, activeId) then
+                anchorId = activeId
+            elseif root.last_focus and findLeaf(root, root.last_focus) then
+                anchorId = root.last_focus
             end
+
+            local parent, idx
+            if anchorId then
+                local _, p, i = findLeaf(root, anchorId)
+                if p then
+                    parent, idx = p, i + 1
+                end
+            end
+            if not parent then
+                parent, idx = root, #root.children + 1
+            end
+            table.insert(parent.children, idx, { kind = 'win', id = id, frac = 0 })
             dbg('insert %s', tostring(id))
             -- the new window takes focus on map
             setLastFocusPath(root, id)
@@ -705,13 +426,6 @@ local function recalculate(ctx)
         if l then
             setLastFocusPath(root, activeId)
         end
-    end
-
-    -- 3. mouse resize: adjust fractions if dragging
-    if not insertedNew and not deadPruned and not inLayoutMsg and activeId then
-        handleMouseResize(ctx, root, wid, activeId, targets)
-    else
-        resetDrag()
     end
 
     normalizeAll(root.children)
@@ -1155,7 +869,7 @@ local function doResize(ctx, parts)
 
     local action = parts[2] -- 'grow', 'shrink'
     local dir = parts[3]    -- 'width', 'height', 'left', 'right', 'up', 'down'
-    local amountStr = parts[4] or '10px'
+    local amountStr = (parts[4] or '10px') .. (parts[5] or '')
 
     if not action or not dir then
         return 'hy3: usage: resize grow|shrink <width|height|left|right|up|down> [amount]'
@@ -1209,8 +923,6 @@ hl.layout.register('hy3', {
     recalculate = recalculate,
 
     layout_msg = function(ctx, msg)
-        inLayoutMsg = true
-        resetDrag()
         local parts = {}
         for w in (msg or ''):gmatch('%S+') do
             parts[#parts + 1] = w
@@ -1232,7 +944,6 @@ hl.layout.register('hy3', {
         else
             res = 'hy3: unknown command: ' .. tostring(msg)
         end
-        inLayoutMsg = false
         return res
     end,
 })
@@ -1267,7 +978,6 @@ local windowActiveSub = hl.on('window.active', onWindowActive)
 _G.hy3dbg = {
     state = S,
     areas = dbgareas,
-    dragState = function() return dragState end,
     windowActiveSub = windowActiveSub,
     dump = function()
         pruneEmptyWorkspaces()
