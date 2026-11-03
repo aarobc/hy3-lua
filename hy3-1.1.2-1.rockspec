@@ -1,10 +1,10 @@
 rockspec_format = "3.0"
 package = "hy3"
-version = "1.1.1-1"
+version = "1.1.2-1"
 
 source = {
    url = "git://github.com/aarobc/hy3-lua.git",
-   tag = "v1.1.1",
+   tag = "v1.1.2",
 }
 
 description = {
