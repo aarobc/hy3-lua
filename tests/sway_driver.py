@@ -27,6 +27,7 @@ class SwayDriver(WMDriver):
         # Ensure workspace 1 is focused and layout is splith
         self._run_swaymsg("workspace 1")
         self._run_swaymsg("layout splith")
+        self._run_swaymsg("focus_wrapping no")
         time.sleep(0.2)
 
     def _get_raw_tree(self) -> dict:

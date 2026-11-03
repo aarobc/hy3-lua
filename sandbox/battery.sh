@@ -72,9 +72,9 @@ echo "active: $(act)"
 closew
 dump
 echo
-echo "== focus wrap: with 2 flat windows, focus left at leftmost wraps to rightmost"
+echo "== focus edge: with 2 flat windows, focus left at leftmost stays on leftmost (no wrap)"
 cmd "focus left"
 echo "active: $(act)"
 cmd "focus left"
-echo "active: $(act)  (should be the OTHER window)"
+echo "active: $(act)  (should stay on the SAME window)"
 echo

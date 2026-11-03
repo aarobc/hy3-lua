@@ -23,10 +23,10 @@
 --                                past-the-end at the workspace edge does the
 --                                cross-output hand-off (notes/dual-monitor.md
 --                                M.1/M.3/M.4/X.1/X.4, M.2 screen-edge no-op)
---   focus left|right|up|down     sway `focus <dir>` w/ wrapping (spec supp.);
+--   focus left|right|up|down     sway `focus <dir>` (no wrapping;
 --                                past the edge crosses to the geometrically
 --                                nearest window on the adjacent monitor
---                                (F.1), no-op at the screen edge (F.3)
+--                                (F.1), no-op at the screen edge (F.3))
 --   splitv | splith | togglesplit  spec section D
 
 local S = {} -- [ws id] = { layout = 'h'|'v', children = { nodes } }
@@ -618,7 +618,7 @@ local function doFocusCross(ctx, wid, leaf, dir, targets)
     end
     local adj = findAdjacentMonitor(m, dir)
     if not adj then
-        return nil -- F.3: no adjacent monitor; caller falls back to wrap
+        return true -- F.3: screen edge: no-op
     end
     local tws = adj.active_workspace
     if not tws or not tws.id then
@@ -761,19 +761,15 @@ local function doFocus(ctx, dir)
     local par = parOf(dir)
     local delta = deltaOf(dir)
 
-    -- levels from bottom up; a target at any level beats wrapping at a
-    -- shallower one; failing all, wrap at the DEEPEST parallel level
-    -- (sway focus_wrapping); no parallel level at all -> no-op.
+    -- climb from bottom up to the first parallel ancestor that has a
+    -- sibling in `dir`; past the workspace edge, cross to the adjacent
+    -- monitor (F.1) or no-op at the screen edge (F.3) -- never wrap.
     local C = leaf
-    local deepest = nil
     local target = nil
     while true do
         local P = findParent(root, C)
         if orientOf(P) == par then
             local i = indexOf(P.children, C)
-            if not deepest then
-                deepest = { P = P, i = i }
-            end
             local T = P.children[i + delta]
             if T then
                 target = T
@@ -786,18 +782,8 @@ local function doFocus(ctx, dir)
         C = P
     end
     if not target then
-        -- past the workspace edge: crossing an adjacent monitor beats
-        -- wrapping (F.1 -- edge focus goes to the nearest window on the
-        -- next monitor, NOT back to the opposite end); only at the true
-        -- screen edge (no adjacent monitor) does the fallback become a
-        -- wrap at the deepest parallel level.
-        if doFocusCross(ctx, wid, leaf, dir, targets) then
-            return true
-        end
-        if not deepest then
-            return true
-        end
-        target = deepest.P.children[delta > 0 and 1 or #deepest.P.children]
+        doFocusCross(ctx, wid, leaf, dir, targets)
+        return true
     end
 
     local w = descendToWindow(target)

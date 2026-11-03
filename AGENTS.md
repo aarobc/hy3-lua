@@ -89,8 +89,10 @@ against real sway 1.12; case numbers refer to `notes/sway-spec.md`):
   traveling (B.7); cousin insertion and focused-child descent (B.8–B.9,
   B.12); promotion (B.10); workspace re-orientation (B.14 — side-by-side
   match with sway); past-end no-op (B.13); focus follows the move (B.16).
-- Focus: climb-up beats wrapping; wrap at the deepest parallel level;
-  descent into the container's remembered focused child.
+- Focus: climb-up to first parallel ancestor with a sibling in `dir`;
+  descent into the container's remembered focused child; past the workspace
+  edge crosses to the nearest window on the adjacent monitor (F.1) or
+  no-ops at the screen edge (F.3) — no wrap-around.
 - Closure (C): proportional fraction renormalize; 1-child containers
   persist (child → frac 1.0); 0-child containers reaped immediately in `removeNode` (C.17–C.19).
   Empty containers are recursively pruned when their last child moves or closes.
@@ -110,10 +112,8 @@ against real sway 1.12; case numbers refer to `notes/sway-spec.md`):
   (X.4); screen edge → no-op (M.2). `focus` past the edge crosses to
   the geometrically nearest window (F.1, absolute screen-space distance —
   see the "No shared coordinate space" gotcha),
-  empty target → no-op (F.2), screen edge → no-op (F.3). Crossing
-  BEATS wrap: wrap at the deepest parallel level is only the screen-
-  edge fallback (verified against sway F.1; single-monitor wrap
-  behavior is unchanged). Mechanism: tree is migrated first, then
+  empty target → no-op (F.2), screen edge → no-op (F.3) (never wraps).
+  Mechanism: tree is migrated first, then
   `hl.dsp.window.move({workspace=<target name>, window=<HL.Window>,
   follow=true})` moves the real window (see gotchas).
 

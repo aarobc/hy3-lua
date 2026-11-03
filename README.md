@@ -13,7 +13,7 @@ bstack) don't provide:
   `splith`/`splitv` model: a container remembers its orientation and
   every window that lands in it (opened or moved in) inherits it until
   explicitly toggled.
-- **Sway-correct focus traversal** with wrapping, plus **cross-monitor
+- **Sway-correct focus traversal** (no wrap-around), plus **cross-monitor
   hand-off** for both `move` and `focus` past a workspace edge.
 
 The behavior is specified empirically against sway 1.12 in
@@ -110,7 +110,7 @@ the layout's own persisted tree decide.
 local mod = "SUPER"
 local function hy3(msg) return hl.dsp.layout(msg) end
 
--- focus (wraps within the workspace; crosses to the nearest window on
+-- focus (no wrap-around; crosses to the nearest window on
 -- the adjacent monitor past an edge)
 hl.bind(mod .. "+h", hy3("focus left"))
 hl.bind(mod .. "+l", hy3("focus right"))
@@ -139,7 +139,7 @@ layout registrations.
 | Command         | Behavior                                                    |
 | --------------- | ----------------------------------------------------------- |
 | `move <dir>`    | sway `move`; past the workspace edge, hands the window to the adjacent monitor's active workspace |
-| `focus <dir>`   | sway `focus` with wrapping; past the edge, crosses to the nearest window on the adjacent monitor |
+| `focus <dir>`   | sway `focus` (no wrap); past the edge, crosses to the nearest window on the adjacent monitor |
 | `splitv`        | persistent vertical split at the focused container          |
 | `splith`        | persistent horizontal split                                 |
 | `togglesplit`   | toggle the focused container's orientation                  |

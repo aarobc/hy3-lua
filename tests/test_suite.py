@@ -212,24 +212,24 @@ def test_c3(d: WMDriver):
     d.focus("left")      # climbs out to w1*
     assert d.get_tree_string() == "H[w1*, V[w2, w3]]"
 
-@test_case("C.4 Focus wrapping at deepest parallel level")
+@test_case("C.4 Focus no-op at deepest parallel container edge")
 def test_c4(d: WMDriver):
     d.reset()
     d.open_window("w1")
     d.open_window("w2")
     d.split("v")
     d.open_window("w3")  # H[w1, V[w2, w3*]]
-    d.focus("down")      # wraps to w2* inside V
-    assert d.get_tree_string() == "H[w1, V[w2*, w3]]"
+    d.focus("down")      # no-op at bottom of V (no wrap)
+    assert d.get_tree_string() == "H[w1, V[w2, w3*]]"
 
-@test_case("C.5 Focus wrapping at workspace level")
+@test_case("C.5 Focus no-op at workspace edge")
 def test_c5(d: WMDriver):
     d.reset()
     d.open_window("w1")
     d.open_window("w2")
     d.focus("left")      # w1*
-    d.focus("left")      # wraps to w2*
-    assert d.get_tree_string() == "H[w1, w2*]"
+    d.focus("left")      # no-op at left edge (no wrap)
+    assert d.get_tree_string() == "H[w1*, w2]"
 
 # ----------------- D. Closure & Reaping -----------------
 
