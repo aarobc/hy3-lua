@@ -29,7 +29,7 @@
 --                                (F.1), no-op at the screen edge (F.3))
 --   splitv | splith | togglesplit  spec section D
 
-local S = {} -- [ws id] = { layout = 'h'|'v', children = { nodes } }
+local S = (_G.hy3dbg and _G.hy3dbg.state) or {} -- [ws id] = { layout = 'h'|'v', children = { nodes } }
              -- node: { kind='win', id, frac }
              --   or { kind='con', orient, frac, last_focus, children }
 
@@ -240,6 +240,91 @@ end
 
 -- ---------------------------------------------------------------- resize
 
+local dragState = nil
+local inLayoutMsg = false
+local dragTimerGen = 0
+
+local function resetDrag()
+    dragState = nil
+    dragTimerGen = dragTimerGen + 1
+end
+
+local function scheduleDragReset()
+    if not hl.timer then
+        return
+    end
+    dragTimerGen = dragTimerGen + 1
+    local curGen = dragTimerGen
+    pcall(hl.timer, function()
+        if dragTimerGen == curGen then
+            dragState = nil
+        end
+    end, { timeout = 250, type = 'oneshot' })
+end
+
+local function isModDown()
+    if not hl.is_key_down then
+        return false
+    end
+    local keys = { 'Super_L', 'Super_R', 'Alt_L', 'Alt_R', 'Meta_L', 'Meta_R', 125, 126, 133, 134, 56, 64, 100, 108 }
+    for _, k in ipairs(keys) do
+        local ok, down = pcall(hl.is_key_down, k)
+        if ok and down == true then
+            return true
+        end
+    end
+    return false
+end
+
+local function computeBox(root, targetNode, area)
+    if targetNode == root then
+        return { x = area.x, y = area.y, w = area.w, h = area.h }
+    end
+    local function find(node, currentBox)
+        if node == targetNode then
+            return currentBox
+        end
+        if node.kind == 'con' or node == root then
+            local x, y = currentBox.x, currentBox.y
+            local orient = orientOf(node)
+            for _, c in ipairs(node.children or {}) do
+                local bw = (orient == 'h') and (currentBox.w * c.frac) or currentBox.w
+                local bh = (orient == 'v') and (currentBox.h * c.frac) or currentBox.h
+                local b = { x = x, y = y, w = bw, h = bh }
+                local r = find(c, b)
+                if r then
+                    return r
+                end
+                if orient == 'h' then
+                    x = x + bw
+                else
+                    y = y + bh
+                end
+            end
+        end
+    end
+    return find(root, area) or area
+end
+
+local function findLeafAtPoint(root, x, y)
+    local function rec(node)
+        if node.kind == 'win' then
+            local b = node._box
+            if b and x >= b.x and x <= b.x + b.w and y >= b.y and y <= b.y + b.h then
+                return node
+            end
+        elseif node.kind == 'con' or node == root then
+            for _, c in ipairs(node.children or {}) do
+                local r = rec(c)
+                if r then
+                    return r
+                end
+            end
+        end
+    end
+    return rec(root)
+end
+
 -- Find ancestor con of `con` whose parent layout matches `dir`'s parallel
 -- orientation and has a resizing sibling in direction `dir` (sway
 -- container_find_resize_parent + container_get_resize_sibling).
@@ -263,6 +348,132 @@ local function findResizeTarget(root, con, dir)
         C = P
     end
     return nil
+end
+
+local function handleMouseResize(ctx, root, wid, activeId, targets)
+    if not isModDown() then
+        resetDrag()
+        return
+    end
+
+    if not hl.get_cursor_pos then
+        return
+    end
+    local cur = hl.get_cursor_pos()
+    if not cur or not cur.x or not cur.y then
+        return
+    end
+
+    if dragState and dragState.wid == wid then
+        scheduleDragReset()
+
+        local dx = cur.x - dragState.lastX
+        local dy = cur.y - dragState.lastY
+        dragState.lastX = cur.x
+        dragState.lastY = cur.y
+
+        if math.abs(dx) >= 0.5 and dragState.hCon and dragState.hSib and dragState.hP then
+            if indexOf(dragState.hP.children, dragState.hCon) and indexOf(dragState.hP.children, dragState.hSib) then
+                local P = dragState.hP
+                local P_w = (P._box and P._box.w) or ctx.area.w
+                if P_w > 0 then
+                    local delta = (dragState.edgeX == 'right') and dx or -dx
+                    local dfrac = delta / P_w
+                    local minFrac = math.max(0.02, math.min(0.2, 40 / math.max(1, P_w)))
+                    if dfrac > 0 then
+                        dfrac = math.min(dfrac, math.max(0, dragState.hSib.frac - minFrac))
+                    elseif dfrac < 0 then
+                        dfrac = math.max(dfrac, -math.max(0, dragState.hCon.frac - minFrac))
+                    end
+                    dragState.hCon.frac = dragState.hCon.frac + dfrac
+                    dragState.hSib.frac = dragState.hSib.frac - dfrac
+                end
+            end
+        end
+
+        if math.abs(dy) >= 0.5 and dragState.vCon and dragState.vSib and dragState.vP then
+            if indexOf(dragState.vP.children, dragState.vCon) and indexOf(dragState.vP.children, dragState.vSib) then
+                local P = dragState.vP
+                local P_h = (P._box and P._box.h) or ctx.area.h
+                if P_h > 0 then
+                    local delta = (dragState.edgeY == 'down') and dy or -dy
+                    local dfrac = delta / P_h
+                    local minFrac = math.max(0.02, math.min(0.2, 40 / math.max(1, P_h)))
+                    if dfrac > 0 then
+                        dfrac = math.min(dfrac, math.max(0, dragState.vSib.frac - minFrac))
+                    elseif dfrac < 0 then
+                        dfrac = math.max(dfrac, -math.max(0, dragState.vCon.frac - minFrac))
+                    end
+                    dragState.vCon.frac = dragState.vCon.frac + dfrac
+                    dragState.vSib.frac = dragState.vSib.frac - dfrac
+                end
+            end
+        end
+    else
+        local leaf = nil
+        if activeId then
+            leaf = findLeaf(root, activeId)
+        end
+        if not leaf then
+            leaf = findLeafAtPoint(root, cur.x, cur.y)
+        end
+        if not leaf then
+            return
+        end
+
+        local winId = leaf.id
+        local winBox = leaf._box
+        if not winBox and targets[winId] then
+            local t = targets[winId]
+            if t.window and t.window.at and t.window.size then
+                winBox = { x = t.window.at.x, y = t.window.at.y, w = t.window.size.x, h = t.window.size.y }
+            end
+        end
+        if not winBox then
+            winBox = computeBox(root, leaf, ctx.area)
+        end
+
+        if winBox and winBox.w > 0 and winBox.h > 0 then
+            local edgeX = (cur.x > winBox.x + winBox.w / 2) and 'right' or 'left'
+            local edgeY = (cur.y > winBox.y + winBox.h / 2) and 'down' or 'up'
+
+            local hCon, hP, _, hSib = findResizeTarget(root, leaf, edgeX)
+            if not hCon then
+                local oppX = (edgeX == 'right') and 'left' or 'right'
+                local c, p, _, s = findResizeTarget(root, leaf, oppX)
+                if c and s then
+                    hCon, hP, hSib = c, p, s
+                    edgeX = oppX
+                end
+            end
+
+            local vCon, vP, _, vSib = findResizeTarget(root, leaf, edgeY)
+            if not vCon then
+                local oppY = (edgeY == 'down') and 'up' or 'down'
+                local c, p, _, s = findResizeTarget(root, leaf, oppY)
+                if c and s then
+                    vCon, vP, vSib = c, p, s
+                    edgeY = oppY
+                end
+            end
+
+            dragState = {
+                wid = wid,
+                winId = winId,
+                lastX = cur.x,
+                lastY = cur.y,
+                edgeX = edgeX,
+                edgeY = edgeY,
+                hCon = hCon,
+                hSib = hSib,
+                hP = hP,
+                vCon = vCon,
+                vSib = vSib,
+                vP = vP,
+            }
+            scheduleDragReset()
+        end
+    end
 end
 
 -- ----------------------------------------------------------------- place
@@ -364,6 +575,7 @@ local function recalculate(ctx)
     dbg('recalc n=%d ids=[%s] active=%s', n, table.concat(idlist, ','), tostring(activeId))
 
     -- 1. close: drop dead leaves; reap empty containers (C.17-C.19)
+    local deadPruned = false
     local function pruneDead(children)
         local m = #children
         for i = m, 1, -1 do
@@ -371,11 +583,13 @@ local function recalculate(ctx)
             if c.kind == 'win' then
                 if not live[c.id] then
                     table.remove(children, i)
+                    deadPruned = true
                 end
             else
                 pruneDead(c.children)
                 if #c.children == 0 then
                     table.remove(children, i)
+                    deadPruned = true
                 end
             end
         end
@@ -426,6 +640,13 @@ local function recalculate(ctx)
         if l then
             setLastFocusPath(root, activeId)
         end
+    end
+
+    -- 3. mouse resize: adjust fractions if dragging with resize button
+    if not insertedNew and not deadPruned and not inLayoutMsg then
+        handleMouseResize(ctx, root, wid, activeId, targets)
+    else
+        resetDrag()
     end
 
     normalizeAll(root.children)
@@ -905,10 +1126,12 @@ end
 
 -- ------------------------------------------------------------------ msg
 
-hl.layout.register('hy3', {
+local layoutDef = {
     recalculate = recalculate,
 
     layout_msg = function(ctx, msg)
+        inLayoutMsg = true
+        resetDrag()
         local parts = {}
         for w in (msg or ''):gmatch('%S+') do
             parts[#parts + 1] = w
@@ -930,9 +1153,19 @@ hl.layout.register('hy3', {
         else
             res = 'hy3: unknown command: ' .. tostring(msg)
         end
+        inLayoutMsg = false
         return res
     end,
-})
+}
+
+pcall(hl.layout.register, 'hy3', layoutDef)
+local reg = debug.getregistry()
+for _, v in pairs(reg) do
+    if type(v) == 'table' and type(v.recalculate) == 'function' then
+        v.recalculate = layoutDef.recalculate
+        v.layout_msg = layoutDef.layout_msg
+    end
+end
 
 -- Keep each container's remembered last-focus in step with the REAL focused
 -- window, including focus changes that never go through layout_msg (click-
@@ -964,6 +1197,8 @@ local windowActiveSub = hl.on('window.active', onWindowActive)
 _G.hy3dbg = {
     state = S,
     areas = dbgareas,
+    dragState = function() return dragState end,
+    recalculate = recalculate,
     windowActiveSub = windowActiveSub,
     dump = function()
         pruneEmptyWorkspaces()
